@@ -1,0 +1,44 @@
+# Environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Datasets (add your own; never commit patient data)
+rsna-2024/
+spider/
+data/rsna/
+data/rsna-2024/
+data/spider/
+selected_ids_*.csv
+*.dcm
+*.mha
+*.nii
+*.nii.gz
+
+# Experiment outputs
+outputs/
+!outputs/.gitkeep
+outputs_modal/
+# Model checkpoints (large; never committed — results are summarized in results/)
+*.pt
+*.pth
+*.ckpt
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Keep the committable results summary (small CSV/JSON exported from outputs_modal)
+!results/
+!results/*.csv
+!results/*.json
+
+# Secrets
+.env
+*.env
+kaggle.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

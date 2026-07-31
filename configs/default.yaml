@@ -1,0 +1,58 @@
+# Spine-ViT default configuration.
+# CLI arguments in train.py override any value set here.
+
+# ---- Data ----
+dataset: rsna                 # "rsna" | "spider"
+data_dir: null                # path to dataset root (set via --data_dir)
+task: stenosis                # "stenosis" (RSNA, 3-class) | "pfirrmann" (SPIDER, 5-class)
+image_size: 224               # must be divisible by backbone patch_size (14)
+use_25d: true                 # stack 3 adjacent slices as pseudo-RGB channels
+box_size: 32                  # bbox side length in RESIZED (image_size) pixels — fixed
+                              # extent so every ROI has the same model receptive field
+                              # across studies (removes variable-ROI confound vs strips)
+use_oracle_regions: true      # SPIDER: use GT masks (true) vs intensity heuristic (false)
+num_workers: 4
+
+# ---- Split ----
+seed: 42
+val_frac: 0.15
+test_frac: 0.15
+
+# ---- Model: tokenizer ----
+tokenizer: anatomy            # "anatomy" | "strips" | "patches"
+roi_output_size: 7
+
+# ---- Model: backbone ----
+backbone: dinov2_vits14       # "dinov2_vits14" | "mock" (offline smoke-test backbone)
+freeze_backbone: true
+backbone_dim: 384             # 384 for ViT-S/14
+patch_size: 14                # spatial_scale = 1 / patch_size
+
+# ---- Model: encoder ----
+embed_dim: 256
+encoder_layers: 2
+encoder_heads: 4
+dropout: 0.1
+max_levels: 24                # >= max tokens per sample (RSNA:5 discs, SPIDER interleaved vertebrae+discs)
+pos_encoding: ordinal         # "ordinal" | "learned" | "none"
+
+# ---- Model: heads ----
+head: ce                      # "ce" (softmax cross-entropy) | "coral" (ordinal thresholds)
+num_stenosis_classes: 3
+num_pfirrmann_classes: 5
+
+# ---- Training ----
+batch_size: 16
+lr: 0.0001
+weight_decay: 0.01
+epochs: 100
+patience: 10                  # val is noisy at this scale; don't train far past the plateau
+grad_clip: 1.0
+class_weight: sqrt_inverse    # "inverse" | "sqrt_inverse" | "none" (sqrt trades recall for precision)
+select_metric: kappa          # checkpoint/early-stop on this val metric (kappa is smoother than macro_f1)
+select_window: 3              # select on a k-epoch moving average of the val metric, not the
+                              # raw peak -> requires a consistent plateau, not the luckiest epoch
+device: cuda                  # "cuda" | "cpu" | "mps"
+
+# ---- IO ----
+output_dir: outputs

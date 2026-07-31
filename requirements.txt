@@ -1,0 +1,16 @@
+torch>=2.0
+torchvision>=0.15
+numpy
+pandas
+scikit-learn
+matplotlib
+seaborn
+tqdm
+pyyaml
+SimpleITK
+nibabel
+pydicom
+pillow
+scipy
+kagglehub   # RSNA data download (rsna_setup.py)
+modal       # optional: parallel cloud ablation sweep (modal_run.py)
