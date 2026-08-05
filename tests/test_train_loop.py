@@ -1,14 +1,3 @@
-"""Integration test for the training loop on synthetic data (instructions.md Phase 3).
-
-Drives the real train.run_epoch / evaluate helpers and utils.metrics over a tiny fixed
-synthetic dataset (mock backbone, no DICOM/NIfTI needed). Verifies that:
-  * the loss decreases as the model overfits the tiny set,
-  * metrics and the LevelAttributionAnalyzer produce non-degenerate values,
-  * class-weight computation and checkpoint save/load work.
-
-Run:  python tests/test_train_loop.py
-"""
-
 from __future__ import annotations
 
 import os
@@ -99,7 +88,6 @@ def main():
     print(f"loss: first3={first:.4f} last3={last:.4f}")
     assert last < first, f"loss did not decrease ({first:.4f} -> {last:.4f})"
 
-    # Metrics + attribution on the (overfit) training set.
     eval_res = run_epoch(model, loader, criterion, device, cfg, optimizer=None, desc="")
     metrics = compute_metrics(eval_res["preds"], eval_res["targets"], NUM_CLASSES)
     analyzer = LevelAttributionAnalyzer(num_classes=NUM_CLASSES)
@@ -113,7 +101,6 @@ def main():
     assert attr["n"] > 0, "analyzer recorded no findings"
     assert "worst_level_accuracy" in attr and "pathology_precision" in attr, "new metrics missing"
 
-    # Checkpoint round-trip.
     ckpt_path = os.path.join(os.path.dirname(__file__), "_tmp_ckpt.pt")
     torch.save({"model_state": model.state_dict(), "config": cfg}, ckpt_path)
     model2 = build_model(cfg)

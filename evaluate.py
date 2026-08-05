@@ -1,17 +1,3 @@
-"""Standalone evaluation + figure generation for Spine-ViT.
-
-Two modes:
-  * default: reload each experiment's best_model.pt, run it on the test split, compute
-    metrics + level-attribution, and generate every paper figure.
-  * --from_saved: skip inference and aggregate each experiment's already-written
-    test_results.json / history.json (no data or GPU needed). Handy for regenerating
-    the comparison table and curves.
-
-Usage:
-    python evaluate.py --experiments_dir outputs --data_dir /path/to/rsna-2024 --generate_figures
-    python evaluate.py --experiments_dir outputs --from_saved --generate_figures
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -49,9 +35,6 @@ def _load_json(path: str):
     return None
 
 
-# --------------------------------------------------------------------------------------
-# Inference over the test split
-# --------------------------------------------------------------------------------------
 def run_test_inference(exp_dir: str, config: Dict, device: torch.device):
     """Return (metrics, attribution, preds, targets, levels, sample_batch, attn)."""
     from train import get_dataloaders, move_batch
@@ -70,7 +53,7 @@ def run_test_inference(exp_dir: str, config: Dict, device: torch.device):
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
             batch = move_batch(batch, device)
-            if i == 0:  # capture attention on the first batch for figures
+            if i == 0:
                 out, attn = model.forward_with_attention(batch)
                 sample_batch = batch
             else:
@@ -91,14 +74,10 @@ def run_test_inference(exp_dir: str, config: Dict, device: torch.device):
     return metrics, attribution, preds, targets, levels, sample_batch, attn
 
 
-# --------------------------------------------------------------------------------------
-# Figures
-# --------------------------------------------------------------------------------------
 def make_attention_figures(exp_dir, config, sample_batch, attn, eval_dir):
     """Attention heatmap + overlay for the first sample of the test batch."""
     if sample_batch is None or not attn:
         return
-    # First sample: how many tokens does it have?
     k0 = sample_batch["num_levels"][0]
     level_types0 = sample_batch["level_types"][:k0].cpu().numpy()
     level_idx0 = sample_batch["level_indices"][:k0].cpu().numpy()
@@ -108,10 +87,9 @@ def make_attention_figures(exp_dir, config, sample_batch, attn, eval_dir):
     else:
         labels = [f"{'V' if t == 0 else 'D'}{i}" for i, t in zip(level_idx0, level_types0)]
 
-    last_attn = attn[-1][0, :k0, :k0].cpu().numpy()  # last layer, first sample
+    last_attn = attn[-1][0, :k0, :k0].cpu().numpy()
     viz.plot_attention_weights(last_attn, labels, os.path.join(eval_dir, "attention_weights.png"))
 
-    # Overlay: received attention per box (column-sum).
     received = last_attn.sum(axis=0)
     img0 = sample_batch["images"][0].cpu().numpy()
     boxes0 = sample_batch["boxes"][sample_batch["boxes"][:, 0] == 0][:, 1:].cpu().numpy()
@@ -122,16 +100,13 @@ def generate_per_experiment_figures(exp_dir, config, preds, targets, eval_dir):
     name = os.path.basename(exp_dir)
     class_names = CLASS_NAMES[config["task"]]
     viz.plot_grade_confusion_matrix(
-        targets, preds, class_names, f"Confusion — {name}", os.path.join(eval_dir, f"confusion_{name}.png")
+        targets, preds, class_names, f"Confusion - {name}", os.path.join(eval_dir, f"confusion_{name}.png")
     )
     history = _load_json(os.path.join(exp_dir, "history.json"))
     if history:
         viz.plot_training_curves(history, os.path.join(eval_dir, f"curves_{name}.png"))
 
 
-# --------------------------------------------------------------------------------------
-# Table
-# --------------------------------------------------------------------------------------
 def print_comparison_table(rows: List[Dict]):
     header = (f"{'Experiment':40s} {'Tokenizer':9s} {'PosEnc':8s} {'MacroF1':>8s} {'Kappa':>7s} "
               f"{'BalAcc':>7s} {'WorstLvl':>8s} {'PathP':>6s} {'PathR':>6s}")
@@ -145,7 +120,7 @@ def print_comparison_table(rows: List[Dict]):
         )
     print("-" * len(header))
     print(f"{'LumbarDISC framework (ref)':40s} {'Cuboid':9s} {'Context':8s} "
-          f"{0.783:8.3f} {0.765:7.3f} {'—':>7s} {'—':>8s} {'—':>6s} {'—':>6s}\n")
+          f"{0.783:8.3f} {0.765:7.3f} {'-':>7s} {'-':>8s} {'-':>6s} {'-':>6s}\n")
 
 
 def save_markdown_table(rows: List[Dict], path: str):
@@ -159,14 +134,11 @@ def save_markdown_table(rows: List[Dict], path: str):
             f"{r['macro_f1']:.3f} | {r['kappa']:.3f} | {r['balanced_acc']:.3f} | "
             f"{r['worst_lvl']:.3f} | {r['path_prec']:.3f} | {r['path_rec']:.3f} |"
         )
-    lines.append("| LumbarDISC framework (ref) | Cuboid | Context | 0.783 | 0.765 | — | — | — | — |")
+    lines.append("| LumbarDISC framework (ref) | Cuboid | Context | 0.783 | 0.765 | - | - | - | - |")
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
 
-# --------------------------------------------------------------------------------------
-# Human-readable labels + ordering for figures
-# --------------------------------------------------------------------------------------
 _TOK = {"anatomy": "Anatomy", "strips": "Strips", "patches": "Patches", "cast_crop": "CAST-crop"}
 _PE = {"ordinal": "Ordinal", "learned": "Learned", "none": "None"}
 
@@ -195,7 +167,7 @@ def _order_key(a: Dict) -> int:
 
 def aggregate_perlevel(analyzer_results: Dict[str, Dict], rows: List[Dict]) -> Dict[str, Dict]:
     """Average per-level exact_acc across seeds -> {pretty_label: {'per_level': {...}}}."""
-    meta = {r["name"]: r for r in rows}  # name -> row (has group/tokenizer/pos_encoding)
+    meta = {r["name"]: r for r in rows}
     groups: Dict[str, List] = {}
     for name, attr in analyzer_results.items():
         if name in meta:
@@ -253,9 +225,6 @@ def print_aggregated_table(agg: List[Dict]):
     print("-" * len(header))
 
 
-# --------------------------------------------------------------------------------------
-# Main
-# --------------------------------------------------------------------------------------
 def main():
     args = parse_args()
     device = torch.device("cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu")
@@ -292,14 +261,12 @@ def main():
         rows.append(
             {
                 "name": name,
-                # config signature with the seed suffix stripped -> groups seeds together
                 "group": re.sub(r"_s\d+$", "", name),
                 "tokenizer": config.get("tokenizer", "?"),
                 "pos_encoding": config.get("pos_encoding", "?"),
                 "macro_f1": metrics.get("macro_f1", 0.0),
                 "kappa": metrics.get("kappa", 0.0),
                 "balanced_acc": metrics.get("balanced_acc", 0.0),
-                # honest level metrics: non-gameable worst-level id + detection precision/recall
                 "worst_lvl": attribution.get("worst_level_accuracy") or 0.0,
                 "path_prec": attribution.get("pathology_precision", 0.0),
                 "path_rec": attribution.get("pathology_recall", 0.0),
@@ -322,12 +289,10 @@ def main():
 
     if args.generate_figures:
         agg_sorted = sorted(agg, key=_order_key)
-        # bar charts: one bar per config (seed mean), clean labels, std error bars
         for metric in ("macro_f1", "kappa", "worst_lvl"):
             means = {pretty_label(a): a[f"{metric}_mean"] for a in agg_sorted}
             errs = {pretty_label(a): a[f"{metric}_std"] for a in agg_sorted}
             viz.plot_ablation_comparison(means, metric, os.path.join(eval_dir, f"ablation_{metric}.png"), errors=errs)
-        # per-level heatmap: 6 configs (seed-averaged), clean labels
         heat = aggregate_perlevel(analyzer_results, rows)
         viz.plot_level_attribution_heatmap(heat, os.path.join(eval_dir, "level_attribution_heatmap.png"))
 

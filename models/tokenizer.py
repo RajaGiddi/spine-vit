@@ -1,20 +1,3 @@
-"""Tokenizers: three ways to turn a backbone feature map into per-level tokens.
-
-All three share one output contract so they are drop-in interchangeable:
-
-    forward(feature_map, boxes, level_indices, num_levels) -> (N_total, embed_dim)
-
-where feature_map is (B, C, H', W'), boxes is (N_total, 5) = [batch_idx, x1, y1, x2, y2]
-in INPUT-image coordinates, level_indices is (N_total,), and num_levels is a list of
-per-sample token counts summing to N_total.
-
-- AnatomyTokenizer  (ours): ROI-Align on the precise anatomical boxes.
-- UniformStripTokenizer   : ROI-Align on K equal horizontal strips (ignores box x/y);
-                            tests whether *precise* localization matters.
-- PatchTokenizer          : learned per-level query attends over all patch tokens; no
-                            spatial localization prior at all.
-"""
-
 from __future__ import annotations
 
 from typing import List
@@ -35,7 +18,6 @@ class _Projection(nn.Module):
         self.act = nn.GELU()
 
     def forward(self, roi_feats: torch.Tensor) -> torch.Tensor:
-        # roi_feats: (N, C, s, s) -> (N, C) -> (N, embed_dim)
         x = self.pool(roi_feats).flatten(1)
         return self.act(self.norm(self.proj(x)))
 
@@ -57,7 +39,7 @@ class AnatomyTokenizer(nn.Module):
             output_size=self.roi_output_size,
             spatial_scale=self.spatial_scale,
             aligned=True,
-        )  # (N_total, C, s, s)
+        )
         return self.projection(roi_feats)
 
 
@@ -78,7 +60,7 @@ class UniformStripTokenizer(nn.Module):
             if k <= 0:
                 continue
             step = H / k
-            for j in range(k):  # j=0 is the topmost strip -> level index 0
+            for j in range(k):
                 rows.append([float(bi), 0.0, j * step, W, (j + 1) * step])
         return torch.tensor(rows, dtype=torch.float32, device=device)
 
@@ -96,14 +78,6 @@ class UniformStripTokenizer(nn.Module):
 
 
 class PatchTokenizer(nn.Module):
-    """Learned per-level query cross-attends over all patch tokens (no localization).
-
-    This is the "does structured localization help at all?" baseline. Each token gets a
-    learned query selected by its ordinal level index; the query attends over every
-    patch token of its own sample. Only precise-vs-learned localization differs from the
-    other tokenizers; the downstream encoder/heads are identical.
-    """
-
     def __init__(self, backbone_dim=384, embed_dim=256, max_levels=12, num_heads=4, image_size=224, spatial_scale=1 / 14):
         super().__init__()
         self.image_size = image_size
@@ -117,38 +91,31 @@ class PatchTokenizer(nn.Module):
     def forward(self, feature_map, boxes, level_indices=None, num_levels=None, images=None):
         assert level_indices is not None and num_levels is not None
         b, c, hp, wp = feature_map.shape
-        patches = feature_map.flatten(2).transpose(1, 2)  # (B, N_patch, C)
-        kv = self.kv_proj(patches)  # (B, N_patch, embed)
+        patches = feature_map.flatten(2).transpose(1, 2)
+        kv = self.kv_proj(patches)
 
         out_tokens = []
         offset = 0
         for bi, k in enumerate(num_levels):
             if k == 0:
                 continue
-            idx = level_indices[offset : offset + k]  # (k,)
-            q = self.query_embed(idx).unsqueeze(0)  # (1, k, embed)
-            kv_b = kv[bi : bi + 1]  # (1, N_patch, embed)
-            attended, _ = self.attn(q, kv_b, kv_b)  # (1, k, embed)
+            idx = level_indices[offset : offset + k]
+            q = self.query_embed(idx).unsqueeze(0)
+            kv_b = kv[bi : bi + 1]
+            attended, _ = self.attn(q, kv_b, kv_b)
             out_tokens.append(attended.squeeze(0))
             offset += k
-        tokens = torch.cat(out_tokens, dim=0)  # (N_total, embed)
+        tokens = torch.cat(out_tokens, dim=0)
         return self.act(self.norm(tokens))
 
 
 class CASTCropTokenizer(nn.Module):
-    """CAST-style baseline: crop each level's ROI from the ORIGINAL image and encode each
-    crop INDEPENDENTLY with a frozen ImageNet ResNet-18 — versus our ROI-Align pooling from
-    a shared DINOv2 feature map. Same boxes, same downstream encoder/head; the ONLY
-    difference is per-level token extraction (independent CNN crop vs shared-map ROI-Align).
-    Tests whether the shared-feature-map mechanism is the architectural novelty.
-    """
-
     def __init__(self, embed_dim=256, crop_size=112, freeze=True, image_size=224):
         super().__init__()
         import torchvision
 
         resnet = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.IMAGENET1K_V1)
-        self.encoder = nn.Sequential(*list(resnet.children())[:-1])  # -> (N, 512, 1, 1)
+        self.encoder = nn.Sequential(*list(resnet.children())[:-1])
         self.freeze = freeze
         if freeze:
             for p in self.encoder.parameters():
@@ -168,11 +135,10 @@ class CASTCropTokenizer(nn.Module):
 
     def forward(self, feature_map, boxes, level_indices=None, num_levels=None, images=None):
         assert images is not None, "cast_crop tokenizer requires the original images"
-        # crop each box from the 224-space image and resize to crop_size (spatial_scale=1.0)
         crops = roi_align(images, boxes, output_size=self.crop_size, spatial_scale=1.0, aligned=True)
         if self.freeze:
             with torch.no_grad():
-                feat = self.encoder(crops).flatten(1)   # (N_total, 512)
+                feat = self.encoder(crops).flatten(1)
         else:
             feat = self.encoder(crops).flatten(1)
         return self.act(self.norm(self.proj(feat)))

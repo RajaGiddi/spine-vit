@@ -1,4 +1,4 @@
-# Spine-ViT: Implementation Specification for Claude Code
+# Spine-ViT: Implementation Specification
 
 ## Project Overview
 
@@ -68,7 +68,7 @@ Python 3.10+. Single GPU (A100 or V100 preferred, T4 minimum).
 
 ---
 
-## Step 2: Data — RSNA 2024 / LumbarDISC
+## Step 2: Data, RSNA 2024 / LumbarDISC
 
 ### 2.1 Source
 
@@ -128,7 +128,7 @@ rsna-2024/
 - Some studies have multiple sagittal T2 series. Pick the first one, or the one with the most coordinate annotations.
 - Some levels may have missing coordinates. Skip those levels for that sample.
 - Some studies have missing severity labels (NaN). Use -1 as ignore index.
-- The DICOM pixel arrays may need orientation correction. Check `ImageOrientationPatient` and `ImagePositionPatient` tags. Many RSNA solutions just read raw pixels and resize — start with that.
+- The DICOM pixel arrays may need orientation correction. Check `ImageOrientationPatient` and `ImagePositionPatient` tags. Many RSNA solutions just read raw pixels and resize; start with that.
 
 **Image preprocessing:**
 - Load the specific DICOM slice indicated by `instance_number`
@@ -158,7 +158,7 @@ If time permits, add left/right neural foraminal narrowing (sagittal T1) and sub
 
 ---
 
-## Step 3: Data — SPIDER
+## Step 3: Data, SPIDER
 
 ### 3.1 Source
 
@@ -169,7 +169,7 @@ Or HuggingFace: `load_dataset("cdoswald/SPIDER")`
 
 **Key differences from RSNA:**
 - NIfTI format (.mha or .nii.gz), not DICOM
-- 3D volumes — extract mid-sagittal slice
+- 3D volumes: extract mid-sagittal slice
 - Ground-truth segmentation masks available (label scheme: vertebrae 1,2,3...; discs 201,202,...; canal 100)
 - Pfirrmann grading (5-class: I-V, encode as 0-4) and stenosis
 - Both vertebral body AND disc tokens (interleaved), not just disc tokens
@@ -236,7 +236,7 @@ class SpineAugmentation:
         pass
 ```
 
-Note: boxes must be transformed consistently with the image. This is critical — if you shift the image down 10px, shift all box y-coordinates down 10px too.
+Note: boxes must be transformed consistently with the image. This is critical: if you shift the image down 10px, shift all box y-coordinates down 10px too.
 
 ---
 
@@ -442,10 +442,10 @@ For each epoch:
 Output directory: `outputs/{dataset}_{tokenizer}_{pos_encoding}_{embed_dim}_{encoder_layers}/`
 
 Each experiment saves:
-- `config.json` — full config
-- `best_model.pt` — best checkpoint
-- `history.json` — per-epoch metrics
-- `test_results.json` — final test metrics
+- `config.json`: full config
+- `best_model.pt`: best checkpoint
+- `history.json`: per-epoch metrics
+- `test_results.json`: final test metrics
 
 ---
 
@@ -593,7 +593,7 @@ The paper's main table should look like this:
 | Patch tokens baseline          | Patches   | N/A      |   ?      |  ?    |   ?     |      N/A       |
 | Ours (fine-tuned backbone)     | Anatomy   | Ordinal  |   ?      |  ?    |   ?     |      ?         |
 |                                |           |          |          |       |         |                |
-| LumbarDISC framework (ref)     | Cuboid    | Context  | 0.783    | 0.765 | —       |      —         |
+| LumbarDISC framework (ref)     | Cuboid    | Context  | 0.783    | 0.765 | -       |      -         |
 ```
 
 Numbers to beat or match: **κ ≈ 0.765, macro-F1 ≈ 0.783** from the LumbarDISC framework paper.
@@ -629,7 +629,7 @@ DINOv2 is frozen by default. This means:
 
 To visualize attention, you need to extract attention weights from the transformer encoder. PyTorch's `TransformerEncoderLayer` doesn't return attention by default. Two options:
 1. Register a forward hook on the `self_attn` module inside each layer
-2. Use `need_weights=True` in `MultiheadAttention.forward()` — requires modifying the encoder layer
+2. Use `need_weights=True` in `MultiheadAttention.forward()`, which requires modifying the encoder layer
 
 Implement option 1 (hook-based) in the evaluation script. Don't modify the training code for this.
 
@@ -684,14 +684,14 @@ For SPIDER (3D NIfTI volumes): load slices [mid-1, mid, mid+1] as 3 channels.
 
 ---
 
-## Step 11: Execution Order for Claude Code
+## Step 11: Execution Order
 
 ### Phase 1: Data (do first)
 1. Implement `data/rsna_dataset.py` with DICOM loading, coordinate parsing, box derivation
 2. Implement `data/spider_dataset.py` with NIfTI loading, mask-to-box extraction
 3. Implement `data/transforms.py`
-4. Write `scripts/explore_rsna.py` — load 5 samples, print shapes, visualize slices with boxes overlaid, print grade distributions
-5. Write `scripts/explore_spider.py` — same for SPIDER
+4. Write `scripts/explore_rsna.py`: load 5 samples, print shapes, visualize slices with boxes overlaid, print grade distributions
+5. Write `scripts/explore_spider.py`: same for SPIDER
 
 ### Phase 2: Model (do second)
 1. Implement `models/backbone.py`

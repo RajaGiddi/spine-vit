@@ -1,15 +1,3 @@
-"""Relate detection quality to grading quality (MICCAI mechanistic result).
-
-Joins per-study localization error (from the detector's localization_per_study.json) with
-per-study grading correctness (from the detected-box grading runs' test_predictions.json,
-averaged over seeds) and asks: do studies the detector localizes worse also grade worse?
-
-Produces a binned figure (grading accuracy vs localization-error bin) + the correlation.
-
-Usage:
-    python analyze_localization.py --experiments_dir outputs_modal
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -40,7 +28,6 @@ def main():
         return
     loc = {str(k): v for k, v in json.load(open(loc_path)).items()}
 
-    # detected-box grading runs (all seeds), each with per-study test predictions
     dirs = [d for d in sorted(glob.glob(os.path.join(args.experiments_dir, "*_det_s*")))
             if os.path.exists(os.path.join(d, "test_predictions.json"))]
     if not dirs:
@@ -48,7 +35,7 @@ def main():
         return
     print(f"[info] {len(dirs)} detected grading run(s): {[os.path.basename(d) for d in dirs]}")
 
-    correct, total = defaultdict(int), defaultdict(int)   # per study, summed over seeds
+    correct, total = defaultdict(int), defaultdict(int)
     for d in dirs:
         tp = json.load(open(os.path.join(d, "test_predictions.json")))
         for sid, tg, pr in zip(tp["studyids"], tp["targets"], tp["preds"]):
@@ -63,7 +50,7 @@ def main():
         if e is None:
             continue
         err.append(float(e))
-        acc.append(correct[sid] / tot)     # per-study exact-grade accuracy (over levels x seeds)
+        acc.append(correct[sid] / tot)
     err, acc = np.array(err), np.array(acc)
     if err.size < 3:
         print("[warn] too few studies to correlate")
@@ -76,7 +63,7 @@ def main():
           f"Pearson {r:+.3f} (p={p:.2g}), Spearman {rs:+.3f} (p={ps:.2g})")
 
     edges = [0, 5, 8, 12, np.inf]
-    labels = ["≤5mm", "5–8mm", "8–12mm", ">12mm"]
+    labels = ["≤5mm", "5-8mm", "8-12mm", ">12mm"]
     means, sems, ns = [], [], []
     for i in range(len(edges) - 1):
         m = (err >= edges[i]) & (err < edges[i + 1])

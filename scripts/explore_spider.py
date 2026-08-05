@@ -1,11 +1,3 @@
-"""EDA for the SPIDER dataset (instructions.md Phase 1, Step 11.5).
-
-Loads a few samples, prints shapes and Pfirrmann grade distributions, and saves
-mid-sagittal slices with mask-derived vertebra/disc boxes overlaid.
-
-Run:  python scripts/explore_spider.py --data_dir /path/to/spider
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -37,7 +29,7 @@ def overlay_sample(sample, idx, out_dir):
     ax.imshow(disp, cmap="gray")
     for b, t, tg in zip(boxes, types, targets):
         x1, y1, x2, y2 = b
-        color = "cyan" if t == 1 else "orange"  # disc vs vertebra
+        color = "cyan" if t == 1 else "orange"
         ax.add_patch(patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1.5, edgecolor=color, facecolor="none"))
         if t == 1 and 0 <= tg < len(PFIRRMANN_NAMES):
             ax.text(x1, y1 - 2, PFIRRMANN_NAMES[tg], color="yellow", fontsize=8)

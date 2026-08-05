@@ -1,22 +1,3 @@
-"""Sagittal + axial two-view dataset for canal-stenosis fusion (v2 Task 2).
-
-v1 grades on a single sagittal-T2 slice. Central canal stenosis is read clinically on
-AXIAL T2, so this dataset pairs each sagittal disc-level ROI with the matching axial ROI
-(derived from the Left/Right Subarticular annotations; see data/rsna_axial.py).
-
-Coverage is partial (~94% any / ~90% all-5), so fusion is MASKED: every study still trains
-on its sagittal tokens; a level with no axial slice contributes a learned "missing-axial"
-placeholder instead of a real token. The collate builds `axial_slot` — for each sagittal
-token (flat order), the row of its axial token in the batched axial-image stack, or -1.
-
-Alignment contract (relied on by SpineFusionGrader):
-  - Sagittal tokens are ordered study-by-study, level-by-level (rsna_collate_fn order).
-  - `axial_slot` is aligned 1:1 to that flat sagittal stream.
-  - `axial_images` are concatenated study-by-study; each covered level is its OWN image
-    (its own axial slice), so axial_boxes[:,0] indexes the image stack, not the batch.
-  - `axial_num[i]` = number of covered levels in study i (axial token block size).
-"""
-
 from __future__ import annotations
 
 import os
@@ -38,8 +19,7 @@ class RSNAFusionDataset(RSNADataset):
         self.axial_index = axial_index or {}
         self.axial_box_size = axial_box_size
         self.axial_use_25d = axial_use_25d
-        self.sag_slices = int(sag_slices)   # >1: parasagittal budget control (see _build_sag_multi)
-        # hflip is per-view: sagittal x = A-P (invalid), axial x = L-R (valid).
+        self.sag_slices = int(sag_slices)
         if self.aug is not None:
             from .transforms import SpineAugmentation
             self.aug = SpineAugmentation(image_size=self.image_size, p_hflip=0.0)
@@ -47,7 +27,6 @@ class RSNAFusionDataset(RSNADataset):
         else:
             self.axial_aug = None
 
-    # -- axial slice loading (per level; each level has its own axial series/instance) --
     def _axial_dicom_path(self, sid, series, instance) -> str:
         return os.path.join(self.image_root, str(sid), str(series), f"{instance}.dcm")
 
@@ -87,11 +66,9 @@ class RSNAFusionDataset(RSNADataset):
         return np.stack(chans, axis=0)
 
     def _build_sag_multi(self, sample, item):
-        """K parasagittal slices, stacked to (3K,H,W) so one joint aug keeps all K box-aligned.
-        Sets item['sag_multi_images'] (K,3,H,W) and the shared item['boxes']."""
         K = self.sag_slices
         inst = sample["instance_number"]
-        offs = [j - K // 2 for j in range(K)]          # K=5 -> [-2,-1,0,1,2]
+        offs = [j - K // 2 for j in range(K)]
         from .transforms import _resize_chw
         _, h0, w0 = self._load_sag_2p5d(sample, inst).shape
         sx, sy = self.image_size / w0, self.image_size / h0
@@ -103,9 +80,9 @@ class RSNAFusionDataset(RSNADataset):
                         min(S, cx + half), min(S, cy + half)]
         slices = [_resize_chw(self._load_sag_2p5d(sample, inst + o), self.image_size, self.image_size)
                   for o in offs]
-        stack = np.concatenate(slices, axis=0)          # (3K,H,W)
+        stack = np.concatenate(slices, axis=0)
         if self.aug is not None:
-            stack, boxes = self.aug(stack, boxes)       # one transform, shared boxes
+            stack, boxes = self.aug(stack, boxes)
         multi = stack.reshape(K, 3, self.image_size, self.image_size)
         multi = (multi - multi.mean(axis=(1, 2, 3), keepdims=True)) \
             / (multi.std(axis=(1, 2, 3), keepdims=True) + 1e-6)
@@ -114,7 +91,7 @@ class RSNAFusionDataset(RSNADataset):
         return item
 
     def __getitem__(self, idx: int) -> Dict:
-        item = super().__getitem__(idx)          # sagittal fields (resized + z-scored)
+        item = super().__getitem__(idx)
         sample = self.samples[idx]
         sid = sample["study_id"]
         if self.sag_slices > 1:
@@ -126,22 +103,22 @@ class RSNAFusionDataset(RSNADataset):
         ax_imgs: List[np.ndarray] = []
         ax_boxes: List[List[float]] = []
         ax_lvls: List[int] = []
-        slot: List[int] = []                      # per sag level -> local axial row or -1
+        slot: List[int] = []
 
-        for lv in sample["levels"]:               # SAME order as the sagittal tokens
+        for lv in sample["levels"]:
             li = lv["level_idx"]
             info = ax_levels.get(li)
             if info is None:
                 slot.append(-1)
                 continue
-            img = self._load_axial_25d(sid, info["series"], info["instance"])  # (3,h0,w0)
+            img = self._load_axial_25d(sid, info["series"], info["instance"])
             _, h0, w0 = img.shape
             sx, sy = self.image_size / w0, self.image_size / h0
             img = _resize_chw(img, self.image_size, self.image_size)
             cx, cy = info["cx"] * sx, info["cy"] * sy
             box = np.array([[max(0.0, cx - half), max(0.0, cy - half),
                              min(S, cx + half), min(S, cy + half)]], dtype=np.float32)
-            if self.axial_aug is not None:                 # box in with img so hflip mirrors both
+            if self.axial_aug is not None:
                 img, box = self.axial_aug(img, box)
             mean, std = float(img.mean()), float(img.std())
             img = (img - mean) / (std + 1e-6)
@@ -156,14 +133,14 @@ class RSNAFusionDataset(RSNADataset):
         item["axial_boxes"] = (torch.tensor(ax_boxes, dtype=torch.float32)
                                if n else torch.zeros(0, 4))
         item["axial_level_indices"] = torch.tensor(ax_lvls, dtype=torch.long)
-        item["axial_slot"] = torch.tensor(slot, dtype=torch.long)   # (num_levels,)
+        item["axial_slot"] = torch.tensor(slot, dtype=torch.long)
         item["axial_num"] = n
         return item
 
 
 def rsna_fusion_collate_fn(batch: List[Dict]) -> Dict:
     """Sagittal collate + a batched axial-image stack with an aligned `axial_slot`."""
-    base = rsna_collate_fn(batch)          # images, boxes(N,5), level_indices, ... , num_levels
+    base = rsna_collate_fn(batch)
     H, W = base["images"].shape[-2:]
 
     ax_imgs, ax_boxes, ax_lvls, ax_num, slot_global = [], [], [], [], []
@@ -174,26 +151,25 @@ def rsna_fusion_collate_fn(batch: List[Dict]) -> Dict:
         if n > 0:
             ax_imgs.append(b["axial_images"])
             idxcol = torch.arange(n, dtype=torch.float32).unsqueeze(1) + ax_offset
-            ax_boxes.append(torch.cat([idxcol, b["axial_boxes"]], dim=1))    # (n,5)
+            ax_boxes.append(torch.cat([idxcol, b["axial_boxes"]], dim=1))
             ax_lvls.append(b["axial_level_indices"])
         s = b["axial_slot"]
-        slot_global.append(torch.where(s >= 0, s + ax_offset, s))            # keep -1
+        slot_global.append(torch.where(s >= 0, s + ax_offset, s))
         ax_offset += n
 
     base["axial_images"] = torch.cat(ax_imgs, 0) if ax_imgs else torch.zeros(0, 3, H, W)
     base["axial_boxes"] = torch.cat(ax_boxes, 0) if ax_boxes else torch.zeros(0, 5)
     base["axial_level_indices"] = torch.cat(ax_lvls, 0) if ax_lvls else torch.zeros(0, dtype=torch.long)
-    base["axial_slot"] = torch.cat(slot_global, 0)      # (N_total,) aligned to sag stream
-    base["axial_num"] = ax_num                          # list[int], len B
+    base["axial_slot"] = torch.cat(slot_global, 0)
+    base["axial_num"] = ax_num
 
-    # budget control: stack the parasagittal slices (K fixed) and rebuild boxes from the aug'd items
     if "sag_multi_images" in batch[0]:
-        base["sag_multi_images"] = torch.stack([b["sag_multi_images"] for b in batch], 0)  # (B,K,3,H,W)
+        base["sag_multi_images"] = torch.stack([b["sag_multi_images"] for b in batch], 0)
         boxes_list = []
         for bi, b in enumerate(batch):
             k = b["num_levels"]
             bidx = torch.full((k, 1), float(bi))
-            boxes_list.append(torch.cat([bidx, b["boxes"]], dim=1))    # (k,5)
+            boxes_list.append(torch.cat([bidx, b["boxes"]], dim=1))
         base["boxes"] = torch.cat(boxes_list, 0)
     return base
 
@@ -236,7 +212,7 @@ def make_rsna_fusion_splits(data_dir: str, config: Dict):
         axial_use_25d=config.get("axial_use_25d", True),
         sag_slices=config.get("sag_slices", 1),
     )
-    augment = bool(config.get("augment", False))   # train only
+    augment = bool(config.get("augment", False))
     train_ds = RSNAFusionDataset(data_dir, samples=train_s, augment=augment, **common)
     val_ds = RSNAFusionDataset(data_dir, samples=val_s, augment=False, **common)
     test_ds = RSNAFusionDataset(data_dir, samples=test_s, augment=False, **common)

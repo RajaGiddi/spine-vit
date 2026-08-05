@@ -1,16 +1,3 @@
-"""Local pre-Modal gate for the fusion architecture (v2 Task 2).
-
-Prints forward-pass shapes for all four modes and runs the coverage-masked training check
-the user asked for BEFORE any Modal spend:
-  (1) a batch containing a full-coverage, a partial-coverage, and (if present) a zero-axial
-      study flows through every mode with NO NaN/Inf;
-  (2) the alignment invariant holds (aligned axial token == its source token at each slot);
-  (3) a few optimizer steps reduce the loss and the view-embedding + missing-axial
-      placeholder actually receive gradient (they are load-bearing, not decorative).
-
-Run:  ./.venv/bin/python scripts/fusion_smoke.py --data_dir data/rsna
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -40,7 +27,6 @@ def _pick_batch(train_ds):
         elif na == 0 and zero is None:
             zero = i
     idxs = [j for j in (full, partial, zero) if j is not None]
-    # pad to >=3 with leading samples so packing/masking is non-trivial
     for i in range(len(train_ds)):
         if len(idxs) >= 3:
             break
@@ -93,7 +79,7 @@ def main():
           f"axial-covered levels={int(cov.sum())}/{N}  masked levels={int((~cov).sum())}")
     print(f"    images {tuple(batch['images'].shape)}  boxes {tuple(batch['boxes'].shape)}  "
           f"axial_images {tuple(batch['axial_images'].shape)}  axial_boxes {tuple(batch['axial_boxes'].shape)}")
-    assert (~cov).any(), "no masked level in batch — masking path not exercised"
+    assert (~cov).any(), "no masked level in batch - masking path not exercised"
 
     print("\n[3] forward-pass shapes per mode (all must be finite):")
     for views, fusion in [("sag", None), ("axial", None), ("both", "concat"), ("both", "attn")]:
@@ -118,7 +104,6 @@ def main():
         for i in range(N):
             if slot[i] >= 0:
                 max_err = max(max_err, (aligned[i] - ax[slot[i]]).abs().max().item())
-        # masked positions must equal the (untrained) missing placeholder
         miss_err = (aligned[~cov2] - model.missing_axial).abs().max().item() if (~cov2).any() else 0.0
     print(f"    covered scatter max|err| = {max_err:.2e}   masked==placeholder max|err| = {miss_err:.2e}")
     assert max_err < 1e-5 and miss_err < 1e-5
@@ -163,7 +148,7 @@ def main():
     else:
         print("    (no zero-axial study in this batch; partial-coverage masking already exercised in [5])")
 
-    print("\nALL CHECKS PASSED — shapes + coverage-masked training verified locally.")
+    print("\nALL CHECKS PASSED - shapes + coverage-masked training verified locally.")
 
 
 if __name__ == "__main__":

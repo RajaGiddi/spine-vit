@@ -1,11 +1,3 @@
-"""EDA for the RSNA / LumbarDISC dataset (instructions.md Phase 1, Step 11.4).
-
-Loads a few samples, prints shapes and grade distributions, and saves MRI slices with
-their level boxes overlaid so you can eyeball that boxes land on the discs.
-
-Run:  python scripts/explore_rsna.py --data_dir /path/to/rsna-2024
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -27,8 +19,8 @@ STENOSIS_NAMES = ["Normal/Mild", "Moderate", "Severe"]
 
 
 def overlay_sample(sample, idx, out_dir):
-    img = sample["image"].numpy()  # (3, H, W)
-    disp = img[1]  # center slice
+    img = sample["image"].numpy()
+    disp = img[1]
     boxes = sample["boxes"].numpy()
     level_idx = sample["level_indices"].numpy()
     targets = sample["targets"].numpy()
@@ -72,7 +64,6 @@ def main():
         p = overlay_sample(s, i, args.out_dir)
         print(f"  overlay -> {p}")
 
-    # Grade distribution across the dataset.
     targets = ds.get_all_targets()
     valid = targets[targets != -1]
     print("\nGrade distribution (spinal canal stenosis):")

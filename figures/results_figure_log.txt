@@ -1,0 +1,57 @@
+Figure 3 (figures/tokenizer_comparison.pdf) — seeds 42, 43, 44, mean +/- 1 SD (population):
+    Anatomy (ours)   kappa 0.649+/-0.031   worst_lvl 0.542+/-0.036
+    CAST crop        kappa 0.597+/-0.032   worst_lvl 0.535+/-0.117
+    Patch-query      kappa 0.416+/-0.103   worst_lvl 0.358+/-0.152
+    Uniform strips   kappa 0.332+/-0.061   worst_lvl 0.323+/-0.062
+    outputs_modal/rsna_anatomy_ordinal_256_2_s42/test_results.json
+    outputs_modal/rsna_anatomy_ordinal_256_2_s43/test_results.json
+    outputs_modal/rsna_anatomy_ordinal_256_2_s44/test_results.json
+    outputs_modal/rsna_cast_crop_ordinal_256_2_s42/test_results.json
+    outputs_modal/rsna_cast_crop_ordinal_256_2_s43/test_results.json
+    outputs_modal/rsna_cast_crop_ordinal_256_2_s44/test_results.json
+    outputs_modal/rsna_patches_ordinal_256_2_s42/test_results.json
+    outputs_modal/rsna_patches_ordinal_256_2_s43/test_results.json
+    outputs_modal/rsna_patches_ordinal_256_2_s44/test_results.json
+    outputs_modal/rsna_strips_ordinal_256_2_s42/test_results.json
+    outputs_modal/rsna_strips_ordinal_256_2_s43/test_results.json
+    outputs_modal/rsna_strips_ordinal_256_2_s44/test_results.json
+
+Figure 4 (figures/plane_decomposition.pdf) — paired per-seed deltas on worst_lvl, seeds 42, 43, 44, 45, 46:
+    budget (sag5 - sag1):  s42=+0.111, s43=+0.074, s44=+0.091, s45=+0.176, s46=+0.074  | mean +0.105, p=0.005
+    acquisition (axial - sag5): s42=+0.111, s43=+0.074, s44=+0.121, s45=-0.029, s46=+0.111  | mean +0.078, p=0.050
+    leave-one-seed-out (mean, p, 95% CI):
+      drop s42: budget +0.104 p=0.024 [+0.026, +0.182]  |  acquisition +0.069 p=0.138 [-0.040, +0.179]
+      drop s43: budget +0.113 p=0.015 [+0.042, +0.185]  |  acquisition +0.079 p=0.118 [-0.036, +0.193]
+      drop s44: budget +0.109 p=0.020 [+0.032, +0.186]  |  acquisition +0.067 p=0.138 [-0.039, +0.172]
+      drop s45: budget +0.088 p=0.002 [+0.060, +0.116]  |  acquisition +0.104 p=0.002 [+0.071, +0.137]
+      drop s46: budget +0.113 p=0.015 [+0.042, +0.185]  |  acquisition +0.069 p=0.138 [-0.040, +0.179]
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_aug_s42/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_aug_s43/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_aug_s44/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_aug_s45/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_aug_s46/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_sag5_aug_s42/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_sag5_aug_s43/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_sag5_aug_s44/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_sag5_aug_s45/test_results.json
+    outputs_modal/rsna_fusion_sag_ordinal_256_2_sag5_aug_s46/test_results.json
+    outputs_modal/rsna_fusion_axial_ordinal_256_2_aug_s42/test_results.json
+    outputs_modal/rsna_fusion_axial_ordinal_256_2_aug_s43/test_results.json
+    outputs_modal/rsna_fusion_axial_ordinal_256_2_aug_s44/test_results.json
+    outputs_modal/rsna_fusion_axial_ordinal_256_2_aug_s45/test_results.json
+    outputs_modal/rsna_fusion_axial_ordinal_256_2_aug_s46/test_results.json
+
+Figure 5 (figures/training_curves.pdf) — rsna_anatomy_ordinal_256_2_s44, seed 44; config outputs_modal/rsna_anatomy_ordinal_256_2_s44/config.json, curves outputs_modal/rsna_anatomy_ordinal_256_2_s44/history.json
+    seed survey (5-seed mean test kappa 0.6369):
+      s42: test_kappa 0.6218 (-0.0150 vs mean)  best_epoch 25  epochs 35/40  early_stop=yes
+      s43: test_kappa 0.6923 (+0.0555 vs mean)  best_epoch 26  epochs 36/40  early_stop=yes
+      s44: test_kappa 0.6319 (-0.0050 vs mean)  best_epoch 25  epochs 35/40  early_stop=yes  <- picked
+      s45: test_kappa 0.5776 (-0.0592 vs mean)  best_epoch 37  epochs 40/40  early_stop=no
+      s46: test_kappa 0.6606 (+0.0238 vs mean)  best_epoch 10  epochs 20/40  early_stop=yes
+    epochs are 1-indexed: train.py loops range(1, epochs+1), so best_epoch in test_results.json is the 1-based epoch number (history index best_epoch-1)
+    selected checkpoint epoch 25 (3-epoch smoothed val kappa, = config select_window)
+    early stopping triggered: 35 of 40 epochs ran; final epoch 34 (recorded here but deliberately NOT marked on the figure — the curves ending says training stopped, and the marker was clutter at 84 mm)
+    train loss 0.8697 -> 0.2661 (min 0.2655); val loss 0.7334 -> 0.5232, minimum 0.4526 at epoch 21
+    NOTE: val loss bottoms at epoch 21 then rises while train loss keeps falling — the checkpoint at epoch 25 sits 4 epochs past the val-loss minimum
+    SMOOTHING APPLIED: raw curves drawn faint (alpha 0.22) behind a centred 3-epoch moving average; val loss is epoch-to-epoch noisy and the trend is otherwise hard to read at 84 mm
+    single panel used: train and val loss share a scale (0.27-0.87), so the two-panel variant was not needed (histories record no train kappa, only val)

@@ -1,12 +1,3 @@
-"""Offline forward-pass verification (instructions.md Phase 2, Step 11).
-
-Builds a synthetic batch (no dataset needed) and runs a full forward pass through all
-3 x 3 = 9 tokenizer x positional-encoding combinations using the offline MockBackbone.
-Prints shapes at every stage and asserts output shapes are correct.
-
-Run:  python -m tests.test_forward     (or)     python tests/test_forward.py
-"""
-
 from __future__ import annotations
 
 import os
@@ -24,18 +15,13 @@ NUM_CLASSES = 3
 
 
 def make_synthetic_batch(batch_size=3, image_size=IMAGE_SIZE, seed=0):
-    """Synthetic batch mimicking the collate output.
-
-    Mixes vertebra (type 0) and disc (type 1) tokens so head-filtering is exercised.
-    Per sample: a few disc levels plus one vertebra token.
-    """
     rng = np.random.RandomState(seed)
     images = torch.randn(batch_size, 3, image_size, image_size)
 
     boxes, level_indices, level_types, targets, num_levels = [], [], [], [], []
     for bi in range(batch_size):
-        k_disc = rng.randint(3, 6)  # 3-5 disc levels
-        types = [1] * k_disc + [0]  # add one vertebra token
+        k_disc = rng.randint(3, 6)
+        types = [1] * k_disc + [0]
         k = len(types)
         for j in range(k):
             cx, cy = rng.uniform(40, image_size - 40, size=2)
@@ -43,7 +29,6 @@ def make_synthetic_batch(batch_size=3, image_size=IMAGE_SIZE, seed=0):
             boxes.append([float(bi), cx - half, cy - half, cx + half, cy + half])
         level_indices.extend(range(k))
         level_types.extend(types)
-        # discs get a class label; vertebra gets ignore (-1)
         targets.extend(list(rng.randint(0, NUM_CLASSES, size=k_disc)) + [-1])
         num_levels.append(k)
 
@@ -60,7 +45,7 @@ def make_synthetic_batch(batch_size=3, image_size=IMAGE_SIZE, seed=0):
 
 def base_config():
     return {
-        "backbone": "mock",  # offline; no DINOv2 download
+        "backbone": "mock",
         "backbone_dim": 384,
         "patch_size": 14,
         "freeze_backbone": True,
@@ -108,7 +93,6 @@ def main():
             if not ok:
                 failures += 1
 
-            # attention path (used by evaluate.py)
             with torch.no_grad():
                 _, attn = model.forward_with_attention(batch)
             assert len(attn) == config["encoder_layers"], "attention layer count mismatch"

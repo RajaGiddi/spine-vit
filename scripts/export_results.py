@@ -1,8 +1,3 @@
-
-"""Flatten per-run fusion metrics from the (gitignored) output tree into results/fusion_results.csv.
-
-    python scripts/export_results.py [--experiments_dir outputs_modal] [--out results/fusion_results.csv]
-"""
 from __future__ import annotations
 
 import argparse

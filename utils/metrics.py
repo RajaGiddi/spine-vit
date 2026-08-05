@@ -1,10 +1,3 @@
-"""Metrics: standard grading metrics, class weights, and level-attribution analysis.
-
-The LevelAttributionAnalyzer is the paper's signature diagnostic: for pathological
-findings (grade >= threshold), does the model flag pathology *at the correct level*?
-This is what standard macro-F1 / kappa cannot reveal about level-misattribution.
-"""
-
 from __future__ import annotations
 
 from typing import Dict, List, Optional
@@ -24,10 +17,6 @@ RSNA_LEVEL_NAMES = ["L1/L2", "L2/L3", "L3/L4", "L4/L5", "L5/S1"]
 
 
 def compute_metrics(preds, targets, num_classes: int, task_name: str = "") -> Dict:
-    """Compute macro-F1, Cohen's kappa, balanced accuracy, accuracy, and per-class F1.
-
-    Invalid targets (== IGNORE_INDEX) are filtered out first.
-    """
     preds = np.asarray(preds).reshape(-1)
     targets = np.asarray(targets).reshape(-1)
     valid = targets != IGNORE_INDEX
@@ -42,7 +31,6 @@ def compute_metrics(preds, targets, num_classes: int, task_name: str = "") -> Di
         "n": int(targets.size),
         "accuracy": float((preds == targets).mean()),
         "macro_f1": float(f1_score(targets, preds, labels=labels, average="macro", zero_division=0)),
-        # headline "kappa" stays QUADRATIC-weighted (ordinal-appropriate; matches prior work)
         "kappa": float(cohen_kappa_score(targets, preds, labels=labels, weights="quadratic"))
         if len(np.unique(targets)) > 1
         else 0.0,
@@ -52,7 +40,7 @@ def compute_metrics(preds, targets, num_classes: int, task_name: str = "") -> Di
         "kappa_unweighted": float(cohen_kappa_score(targets, preds, labels=labels))
         if len(np.unique(targets)) > 1
         else 0.0,
-        "mae": float(np.abs(preds - targets).mean()),   # mean |pred - true| in grade units
+        "mae": float(np.abs(preds - targets).mean()),
         "balanced_acc": float(balanced_accuracy_score(targets, preds)),
     }
     for c in range(num_classes):
@@ -63,16 +51,6 @@ def compute_metrics(preds, targets, num_classes: int, task_name: str = "") -> Di
 
 
 def compute_class_weights(dataset_or_targets, num_classes: int, scheme: str = "inverse") -> torch.Tensor:
-    """Class weights from training targets (ignores IGNORE_INDEX).
-
-    scheme:
-      "inverse"      - full inverse frequency: total / (num_classes * count_c). Strong
-                       rebalancing; on rare classes this drives the model to over-flag
-                       (high recall, low precision).
-      "sqrt_inverse" - sqrt of the inverse weights, rescaled to the same mean. Softer:
-                       trades a little recall for meaningfully better precision.
-      "none"         - uniform weights (no rebalancing).
-    """
     if hasattr(dataset_or_targets, "get_all_targets"):
         targets = dataset_or_targets.get_all_targets()
     else:
@@ -91,18 +69,13 @@ def compute_class_weights(dataset_or_targets, num_classes: int, scheme: str = "i
         w = inv
     elif scheme == "sqrt_inverse":
         w = np.sqrt(inv)
-        w = w * (inv.mean() / w.mean())  # keep overall magnitude comparable to inverse
+        w = w * (inv.mean() / w.mean())
     else:
         raise ValueError(f"Unknown class_weight scheme '{scheme}' (inverse|sqrt_inverse|none)")
     return torch.tensor(w, dtype=torch.float32)
 
 
 def coral_pos_weights(dataset_or_targets, num_classes: int) -> torch.Tensor:
-    """Per-threshold positive weights for CORAL = N_neg / N_pos at each rank threshold k
-    (positive = y > k). Threshold 0 balances {Mod,Sev} vs {Normal}; threshold 1 balances
-    {Sev} vs {Normal,Mod}. Each binary task is weighted INDEPENDENTLY — reusing the 3-class
-    per-sample weights instead squeezes the middle class to zero (that was the bug).
-    """
     if hasattr(dataset_or_targets, "get_all_targets"):
         targets = dataset_or_targets.get_all_targets()
     else:
@@ -112,30 +85,24 @@ def coral_pos_weights(dataset_or_targets, num_classes: int) -> torch.Tensor:
     total = counts.sum()
     pw = np.ones(num_classes - 1, dtype=np.float64)
     for k in range(num_classes - 1):
-        n_pos = counts[k + 1:].sum()   # y > k
-        n_neg = total - n_pos          # y <= k
+        n_pos = counts[k + 1:].sum()
+        n_neg = total - n_pos
         pw[k] = n_neg / max(1.0, n_pos)
     return torch.tensor(pw, dtype=torch.float32)
 
 
 def coral_loss(logits: torch.Tensor, targets: torch.Tensor, pos_weight: torch.Tensor = None,
                ignore_index: int = IGNORE_INDEX) -> torch.Tensor:
-    """CORAL ordinal loss. logits (N, K-1) rank-threshold logits; targets (N,) grades in
-    [0, K-1]. Binary target at threshold k is 1 iff y > k. BCE per threshold with an
-    INDEPENDENT per-threshold pos_weight (see coral_pos_weights).
-    """
     valid = targets != ignore_index
     if valid.sum() == 0:
         return logits.sum() * 0.0
     logits, targets = logits[valid], targets[valid]
     k = torch.arange(logits.shape[1], device=logits.device)
-    bin_t = (targets[:, None] > k[None, :]).float()                       # (N, K-1)
+    bin_t = (targets[:, None] > k[None, :]).float()
     return F.binary_cross_entropy_with_logits(logits, bin_t, pos_weight=pos_weight, reduction="mean")
 
 
 def coral_predict(logits: torch.Tensor) -> torch.Tensor:
-    """CORAL decode: predicted grade = number of thresholds passed. (N,K-1) -> (N,) in
-    [0, K-1]. The shared weight vector keeps thresholds monotonic, so this is coherent."""
     return (torch.sigmoid(logits) > 0.5).sum(dim=1)
 
 
@@ -162,22 +129,6 @@ class LevelAttributionAnalyzer:
         )
 
     def compute(self, pathology_threshold: int = 1) -> Dict:
-        """Level-attribution analysis.
-
-        Two things prior work does not report, framed to be *honest* rather than
-        inflatable:
-
-        1. worst_level_accuracy (headline, clinical): per study, does argmax over the
-           levels of the predicted grade land on a truly worst-affected level? This is
-           "which level do you operate on?" and it CANNOT be gamed by predicting
-           pathology everywhere — doing so makes the prediction argmax arbitrary. Only
-           computed over studies that actually have pathology, and only when per-finding
-           study ids were supplied via update(..., patient_id=...).
-
-        2. Pathology detection reported as precision AND recall (+ FP rate). Recall
-           alone ("of pathological levels, how many were flagged") is inflatable by
-           over-flagging; precision exposes exactly that. Report the pair.
-        """
         pred = np.asarray(self.pred_grades)
         true = np.asarray(self.true_grades)
         lvl = np.asarray(self.level_indices)
@@ -188,19 +139,17 @@ class LevelAttributionAnalyzer:
         if true.size == 0:
             return {"n": 0}
 
-        # --- Pathology detection as a level-wise binary problem (grade >= threshold) ---
         pred_pos = pred >= pathology_threshold
         true_pos = true >= pathology_threshold
         tp = int(np.sum(pred_pos & true_pos))
         fp = int(np.sum(pred_pos & ~true_pos))
         fn = int(np.sum(~pred_pos & true_pos))
         tn = int(np.sum(~pred_pos & ~true_pos))
-        recall = tp / (tp + fn) if (tp + fn) else 0.0          # inflatable alone
-        precision = tp / (tp + fp) if (tp + fp) else 0.0       # exposes over-flagging
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        precision = tp / (tp + fp) if (tp + fp) else 0.0
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
-        fp_rate = fp / (fp + tn) if (fp + tn) else 0.0         # of normal levels, fraction flagged
+        fp_rate = fp / (fp + tn) if (fp + tn) else 0.0
 
-        # --- Worst-level identification (per study; non-gameable) ---
         has_ids = pid.size > 0 and not all(p is None for p in pid)
         worst_correct = worst_total = 0
         if has_ids:
@@ -208,14 +157,13 @@ class LevelAttributionAnalyzer:
                 m = pid == p
                 t_g, p_g, l_g = true[m], pred[m], lvl[m]
                 if t_g.max() < pathology_threshold:
-                    continue  # no pathology in this study -> nothing to localize
+                    continue
                 worst_total += 1
                 true_worst_levels = set(l_g[t_g == t_g.max()].tolist())
                 pred_worst_level = int(l_g[int(np.argmax(p_g))])
                 worst_correct += int(pred_worst_level in true_worst_levels)
         worst_level_acc = (worst_correct / worst_total) if worst_total else None
 
-        # --- Per-level breakdown (exact accuracy + detection precision/recall) ---
         per_level = {}
         for li in sorted(np.unique(lvl)):
             m = lvl == li
@@ -233,10 +181,8 @@ class LevelAttributionAnalyzer:
         return {
             "n": int(true.size),
             "n_pathological": int(true_pos.sum()),
-            # Clinical headline — which level is worst-affected (per study). Non-gameable.
             "worst_level_accuracy": worst_level_acc,
             "n_studies_with_pathology": worst_total,
-            # Pathology detection — report the PAIR; recall alone is dishonest.
             "pathology_precision": precision,
             "pathology_recall": recall,
             "pathology_f1": f1,
@@ -268,8 +214,6 @@ def _to_list(x):
 
 
 def _unique_objects(arr: np.ndarray) -> list:
-    """Order-preserving unique for an object array (study ids), avoiding np.unique
-    edge cases with mixed/None values."""
     seen, out = set(), []
     for x in arr.tolist():
         if x not in seen:

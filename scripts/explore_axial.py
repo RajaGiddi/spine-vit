@@ -1,12 +1,3 @@
-"""Axial ROI verification gate (v2 Task 2). Run BEFORE any fusion training.
-
-Reports axial coverage vs the sagittal cohort, checks slice provenance (instance# monotonic
-within series), reports what 32px covers physically on axial, and renders per-level axial
-overlays for 20 studies so the ROIs can be inspected by eye.
-
-Run:  python scripts/explore_axial.py --data_dir data/rsna
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -40,12 +31,11 @@ def overlay_study(data_dir, sid, levels, coords_sub, out_dir, box_px=64):
         except Exception:
             ax.set_title(f"{LEVELS[L]} (load fail)"); ax.axis("off"); continue
         ax.imshow(img, cmap="gray")
-        # raw L/R subarticular points (red) to show the midpoint derivation
         rows = coords_sub[(coords_sub.study_id == sid) & (coords_sub.level == LEVELS[L])]
         for _, r in rows.iterrows():
             ax.plot(r.x, r.y, "r+", markersize=11, markeredgewidth=2)
         cx, cy = info["cx"], info["cy"]
-        ax.plot(cx, cy, "bx", markersize=10, markeredgewidth=2)   # derived canal center
+        ax.plot(cx, cy, "bx", markersize=10, markeredgewidth=2)
         ax.add_patch(patches.Rectangle((cx - box_px / 2, cy - box_px / 2), box_px, box_px,
                                        fill=False, edgecolor="lime", linewidth=1.5))
         tag = "1-sided" if info["sided"] == 1 else ""
@@ -64,7 +54,7 @@ def main():
     ap.add_argument("--out_dir", default="outputs/eda_axial")
     args = ap.parse_args()
 
-    sag = build_rsna_index(args.data_dir)             # sagittal cohort (v1 comparison base)
+    sag = build_rsna_index(args.data_dir)
     sag_ids = sorted({s["study_id"] for s in sag})
     axial = build_axial_index(args.data_dir)
 
@@ -74,13 +64,12 @@ def main():
     print(f"  all 5 levels    : {cov['has_all5_axial']} ({cov['pct_all5']:.0f}%)")
     print(f"  per level       : {cov['per_level_count']}")
     if cov["pct_any"] < 70:
-        print("  [FLAG] <70% axial coverage — keep masked fusion, report canal metrics on full + axial subset")
+        print("  [FLAG] <70% axial coverage - keep masked fusion, report canal metrics on full + axial subset")
 
     bad = axial_monotonicity_flags(axial)
     print(f"\n=== Slice provenance: instance# monotonic within series ===")
     print(f"  studies with NON-monotonic instance#/level (inspect): {len(bad)}  e.g. {bad[:5]}")
 
-    # are the axial IMAGES actually on disk? (our subset only pulled sagittal canal slices)
     on_disk = tot = 0
     for sid, levels in axial.items():
         for L, info in levels.items():
@@ -89,12 +78,11 @@ def main():
             on_disk += os.path.exists(p)
     print(f"\n=== Axial IMAGES on disk: {on_disk}/{tot} referenced slices ===")
     if on_disk == 0:
-        print("  [BLOCKED] axial images not downloaded — the visual gate + box-mm need them.")
+        print("  [BLOCKED] axial images not downloaded - the visual gate + box-mm need them.")
         print("  Re-export axial subarticular slices from a Kaggle notebook (as done for sagittal),")
         print("  then re-run this script. Coverage/provenance above are computed from CSVs only.")
         return
 
-    # axial box size in mm for a few studies (do NOT inherit sagittal 32px)
     print(f"\n=== What 32px (224-space) covers on AXIAL, mm (choose axial box from this) ===")
     shown = 0
     for sid in sag_ids:
@@ -107,7 +95,6 @@ def main():
             if shown >= 5:
                 break
 
-    # overlays for the visual gate
     coords = pd.read_csv(os.path.join(args.data_dir, "train_label_coordinates.csv"))
     sub = coords[coords.condition.isin([LEFT, RIGHT])]
     with_all5 = [s for s in sag_ids if len(axial.get(s, {})) == 5][: args.n]

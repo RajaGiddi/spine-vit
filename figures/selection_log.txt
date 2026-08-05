@@ -1,0 +1,4 @@
+Figure 1 study: 1558814835
+Figure 2a (correct): 1529391466
+Figure 2b (misattribution): 52397721
+Figure 2c (detector fail L1/L2): 144244752  (43.2 mm)

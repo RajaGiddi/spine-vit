@@ -1,9 +1,3 @@
-"""Figure generation for the paper.
-
-All functions save to `save_path` and return the matplotlib Figure. A non-interactive
-backend is forced so these run headless (servers, CI).
-"""
-
 from __future__ import annotations
 
 import os
@@ -47,14 +41,8 @@ def plot_grade_confusion_matrix(true, pred, class_names, title, save_path):
 
 
 def plot_level_attribution_heatmap(analyzer_results: Dict[str, Dict], save_path):
-    """Per-level detection accuracy across models.
-
-    analyzer_results: {model_name: analyzer.compute() dict}. Uses each model's
-    per_level exact_acc.
-    """
     models = list(analyzer_results.keys())
     level_names, matrix = [], []
-    # union of level names, preserving first-seen order
     for res in analyzer_results.values():
         for lv in res.get("per_level", {}):
             if lv not in level_names:
@@ -96,11 +84,6 @@ def plot_attention_weights(attention_matrix, level_labels, save_path, title="Enc
 
 
 def plot_attention_overlay(image, boxes, attention_weights, level_labels, save_path, title="Attention overlay"):
-    """Overlay per-box attention on the MRI slice.
-
-    image: (H, W) or (C, H, W) array. boxes: (K, 4) [x1,y1,x2,y2] in image coords.
-    attention_weights: (K,) received-attention per box (e.g. column-sum of attn matrix).
-    """
     img = np.asarray(image)
     if img.ndim == 3:
         img = img[img.shape[0] // 2] if img.shape[0] <= 4 else img.mean(0)
@@ -131,10 +114,6 @@ def plot_attention_overlay(image, boxes, attention_weights, level_labels, save_p
 
 
 def plot_training_curves(history: Dict, save_path):
-    """Train/val loss and a validation metric over epochs.
-
-    history: {"train_loss": [...], "val_loss": [...], "val_macro_f1": [...], ...}
-    """
     _ensure_dir(save_path)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
     epochs = range(1, len(history.get("train_loss", [])) + 1)
@@ -163,12 +142,8 @@ def plot_training_curves(history: Dict, save_path):
 
 
 def plot_ablation_comparison(results_dict: Dict[str, float], metric_name: str, save_path, errors=None):
-    """Horizontal bar chart comparing a metric across variants, best on top.
-
-    errors: optional {label: std} for error bars (e.g. seed-to-seed std).
-    """
     _ensure_dir(save_path)
-    items = sorted(results_dict.items(), key=lambda kv: kv[1])  # ascending -> best ends on top
+    items = sorted(results_dict.items(), key=lambda kv: kv[1])
     names = [k for k, _ in items]
     values = [v for _, v in items]
     errs = [float(errors.get(n, 0.0)) for n in names] if errors else [0.0] * len(names)

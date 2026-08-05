@@ -1,20 +1,3 @@
-"""Axial ROI derivation from RSNA subarticular-stenosis annotations (v2 Task 2 plumbing).
-
-Central canal stenosis is graded on AXIAL T2 clinically. RSNA annotates Left/Right
-Subarticular Stenosis on the axial series, one (x,y) per side per disc level. The canal
-center is approximated by the midpoint of the two subarticular points; the axial slice for
-that level is the annotation's instance_number.
-
-Three risks this module surfaces (do NOT trust axial fusion until checked):
-  1. Anterior-posterior placement: the subarticular recesses sit lateral AND slightly
-     posterior; the L/R midpoint may land anterior to the thecal sac in y. `posterior_offset`
-     (derived, not eyeballed) can push the center posteriorly. Default 0 -> verify visually.
-  2. Slice provenance: axial lumbar is usually angled stacks (one series per level). We take
-     series_id + instance_number from each level's OWN annotation, so each level comes from
-     its own stack. `axial_monotonicity_flags` checks instance# is monotonic within a series.
-  3. Single-sided fallback: if only one recess is annotated, we use it and flag it.
-"""
-
 from __future__ import annotations
 
 import os
@@ -29,11 +12,6 @@ LEFT, RIGHT = "Left Subarticular Stenosis", "Right Subarticular Stenosis"
 
 
 def build_axial_index(data_dir: str, posterior_offset: float = 0.0) -> Dict[int, Dict[int, Dict]]:
-    """study_id -> {level_idx: {series, instance, cx, cy, sided(1/2), inst_lr, series_lr}}.
-
-    cx/cy are ORIGINAL-pixel coords of the derived canal center (L/R midpoint, optional
-    posterior offset added to y). sided=2 when both recesses annotated, 1 when single-sided.
-    """
     coords = pd.read_csv(os.path.join(data_dir, "train_label_coordinates.csv"))
     sub = coords[coords.condition.isin([LEFT, RIGHT])]
 
@@ -44,7 +22,7 @@ def build_axial_index(data_dir: str, posterior_offset: float = 0.0) -> Dict[int,
             rows = g[g.level == lv]
             if len(rows) == 0:
                 continue
-            pts = []  # (x, y, instance, series)
+            pts = []
             for cond in (LEFT, RIGHT):
                 r = rows[rows.condition == cond]
                 if len(r):
@@ -78,8 +56,6 @@ def axial_coverage(axial: Dict[int, Dict[int, Dict]], all_study_ids: List[int]) 
 
 
 def axial_monotonicity_flags(axial: Dict[int, Dict[int, Dict]]) -> List[int]:
-    """Studies where, within a shared axial series, instance# is NOT monotonic with level
-    index — i.e. a level's slice may come from the wrong stack. These need inspection."""
     bad = []
     for sid, levels in axial.items():
         by_series: Dict[int, List] = {}
@@ -88,7 +64,7 @@ def axial_monotonicity_flags(axial: Dict[int, Dict[int, Dict]]) -> List[int]:
         for series, items in by_series.items():
             if len(items) < 2:
                 continue
-            items.sort()  # by level index
+            items.sort()
             insts = [it[1] for it in items]
             if not (all(a <= b for a, b in zip(insts, insts[1:])) or
                     all(a >= b for a, b in zip(insts, insts[1:]))):
@@ -102,8 +78,6 @@ def load_axial_slice(data_dir: str, sid: int, series: int, instance: int) -> np.
 
 
 def axial_box_mm(data_dir: str, sid: int, series: int, instance: int, box_px_224: int, image_size: int = 224):
-    """Physical extent (mm) that box_px_224 covers on this axial slice — so the axial box
-    size is chosen from mm, not inherited from the sagittal 32px (different FOV/resolution)."""
     import pydicom
 
     ds = pydicom.dcmread(os.path.join(data_dir, "train_images", str(sid), str(series), f"{instance}.dcm"),

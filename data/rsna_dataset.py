@@ -1,18 +1,3 @@
-"""RSNA 2024 Lumbar Spine / LumbarDISC dataset loader.
-
-We build one training sample per study: a single (representative) sagittal-T2 slice
-with up to five disc-level bounding boxes derived from the point annotations in
-`train_label_coordinates.csv`. Each box is centered on the Spinal Canal Stenosis
-coordinate for that level, and its 3-class severity grade comes from `train.csv`.
-
-Design choices (see instructions.md Step 2):
-- Task: spinal canal stenosis on sagittal T2 only (the clean, comparable setting).
-- 2.5D input: the annotated slice plus its two neighbors, stacked as pseudo-RGB.
-- Point coordinates -> fixed-size boxes (box_size in ORIGINAL DICOM pixels), then
-  rescaled together with the image to `image_size`.
-- All RSNA tokens are disc levels -> level_type == 1 for every box.
-"""
-
 from __future__ import annotations
 
 import os
@@ -25,10 +10,8 @@ from torch.utils.data import Dataset
 
 from .transforms import SpineAugmentation
 
-# Canonical lumbar disc levels in anatomical (top -> bottom) order.
 LEVELS = ["L1/L2", "L2/L3", "L3/L4", "L4/L5", "L5/S1"]
 LEVEL_TO_IDX = {lv: i for i, lv in enumerate(LEVELS)}
-# train.csv column suffix form, e.g. "l1_l2".
 LEVEL_TO_COL = {lv: lv.lower().replace("/", "_") for lv in LEVELS}
 
 SEVERITY_MAP = {"Normal/Mild": 0, "Moderate": 1, "Severe": 2}
@@ -36,14 +19,7 @@ STENOSIS_CONDITION = "Spinal Canal Stenosis"
 IGNORE_INDEX = -1
 
 
-# --------------------------------------------------------------------------------------
-# DICOM loading
-# --------------------------------------------------------------------------------------
 def load_dicom_slice(path: str) -> np.ndarray:
-    """Load a DICOM slice as a float32 array normalized to ~[0, 1].
-
-    Applies rescale slope/intercept then window/level if present, else min-max.
-    """
     import pydicom
 
     ds = pydicom.dcmread(path)
@@ -89,26 +65,12 @@ def coord_to_box(x, y, box_size, img_h, img_w) -> List[float]:
     return [x1, y1, x2, y2]
 
 
-# --------------------------------------------------------------------------------------
-# Index building
-# --------------------------------------------------------------------------------------
 def build_rsna_index(
     data_dir: str,
     task: str = "stenosis",
     condition: str = STENOSIS_CONDITION,
     require_images: bool = True,
 ) -> List[Dict]:
-    """Parse the RSNA CSVs into a lightweight list of per-study samples.
-
-    Each returned dict contains only metadata (no pixels): study_id, series_id, the
-    representative instance_number, and an ordered list of levels with their (x, y)
-    coordinate and severity target. Studies with no usable sagittal-T2 canal
-    annotations are skipped.
-
-    If ``require_images`` is True (default), studies whose ``train_images/{study_id}/``
-    folder is absent are also skipped. This makes the loader robust to *partial*
-    downloads (e.g. a subset) even when the CSVs still list every study.
-    """
     train_csv = pd.read_csv(os.path.join(data_dir, "train.csv"))
     desc_csv = pd.read_csv(os.path.join(data_dir, "train_series_descriptions.csv"))
     coord_csv = pd.read_csv(os.path.join(data_dir, "train_label_coordinates.csv"))
@@ -116,7 +78,6 @@ def build_rsna_index(
 
     train_csv = train_csv.set_index("study_id")
 
-    # study_id -> set of sagittal-T2 series_ids
     is_sagt2 = desc_csv["series_description"].str.contains("sagittal t2", case=False, na=False)
     sagt2 = desc_csv[is_sagt2]
     study_to_series: Dict[int, List[int]] = (
@@ -128,37 +89,30 @@ def build_rsna_index(
     samples: List[Dict] = []
     for study_id, series_ids in study_to_series.items():
         if require_images and not os.path.isdir(os.path.join(image_root, str(study_id))):
-            continue  # images for this study were not downloaded -> skip
+            continue
         study_coords = coord_cond[
             (coord_cond["study_id"] == study_id) & (coord_cond["series_id"].isin(series_ids))
         ]
         if len(study_coords) == 0:
             continue
 
-        # Pick the sagittal-T2 series with the most canal annotations.
         best_series = study_coords["series_id"].value_counts().idxmax()
         series_coords = study_coords[study_coords["series_id"] == best_series]
 
-        # Representative slice: the most frequently annotated instance in that series.
         instance_number = int(series_coords["instance_number"].value_counts().idxmax())
 
-        # Ensure the exact slice the loader will read is on disk. With partial
-        # (rate-limited) downloads a study folder can exist while its representative
-        # slice is missing -> skip rather than crash at __getitem__. (2.5D neighbors
-        # are optional and handled separately.)
         if require_images and not os.path.exists(
             os.path.join(image_root, str(study_id), str(best_series), f"{instance_number}.dcm")
         ):
             continue
 
-        # Severity grades for this study (may be missing -> ignore index).
         grades = train_csv.loc[study_id] if study_id in train_csv.index else None
 
         levels = []
-        for lv in LEVELS:  # keep anatomical ordering
+        for lv in LEVELS:
             rows = series_coords[series_coords["level"] == lv]
             if len(rows) == 0:
-                continue  # this level has no coordinate -> skip
+                continue
             row = rows.iloc[0]
             level_idx = LEVEL_TO_IDX[lv]
 
@@ -190,9 +144,6 @@ def build_rsna_index(
     return samples
 
 
-# --------------------------------------------------------------------------------------
-# Dataset
-# --------------------------------------------------------------------------------------
 class RSNADataset(Dataset):
     """RSNA sagittal-T2 spinal-canal-stenosis dataset (level-wise 3-class grading)."""
 
@@ -201,12 +152,12 @@ class RSNADataset(Dataset):
         data_dir: str,
         samples: Optional[List[Dict]] = None,
         image_size: int = 224,
-        box_size: int = 32,  # side length in RESIZED (image_size) pixels (see __getitem__)
+        box_size: int = 32,
         use_25d: bool = True,
         augment: bool = False,
         task: str = "stenosis",
-        box_source: str = "oracle",       # "oracle" (annotation coords) | "detected" (learned)
-        detected_centers: Optional[Dict] = None,  # {study_id: {level_idx: [x_orig, y_orig]}}
+        box_source: str = "oracle",
+        detected_centers: Optional[Dict] = None,
     ):
         self.data_dir = data_dir
         self.image_root = os.path.join(data_dir, "train_images")
@@ -222,7 +173,6 @@ class RSNADataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    # -- lightweight label access (no image loading) for class-weight computation --
     def get_all_targets(self) -> np.ndarray:
         out = []
         for s in self.samples:
@@ -244,7 +194,7 @@ class RSNADataset(Dataset):
                 p = self._dicom_path(study_id, series_id, inst + off)
                 if off != 0 and os.path.exists(p):
                     sl = load_dicom_slice(p)
-                    if sl.shape != center.shape:  # guard against odd series
+                    if sl.shape != center.shape:
                         sl = center
                 else:
                     sl = center
@@ -254,18 +204,13 @@ class RSNADataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict:
         sample = self.samples[idx]
-        img = self._load_image(sample)  # (3, H0, W0)
+        img = self._load_image(sample)
         _, h0, w0 = img.shape
 
         level_indices = np.array([lv["level_idx"] for lv in sample["levels"]], dtype=np.int64)
-        level_types = np.ones(len(sample["levels"]), dtype=np.int64)  # all discs
+        level_types = np.ones(len(sample["levels"]), dtype=np.int64)
         targets = np.array([lv["target"] for lv in sample["levels"]], dtype=np.int64)
 
-        # Resize image to image_size, then place a FIXED-size box (box_size px in the
-        # resized image) on each annotation center. Only the center comes from the (x, y)
-        # coordinate; the extent is constant across studies so every ROI has the same
-        # model receptive field — matching the strips baseline and removing the
-        # variable-extent confound (raw pixel spacing varies ~3.6x across RSNA sites).
         from .transforms import _resize_chw
 
         sx = self.image_size / w0
@@ -274,9 +219,6 @@ class RSNADataset(Dataset):
 
         half = self.box_size / 2.0
         S = float(self.image_size)
-        # box center source: annotation coords (oracle) or the detector's predictions.
-        # Both are in ORIGINAL pixel coords, so the same sx/sy resize applies -> only the
-        # center moves; the fixed 32-px extent is identical.
         det = self.detected_centers.get(str(sample["study_id"]), {}) \
             if (self.box_source == "detected" and self.detected_centers is not None) else {}
         boxes = np.zeros((len(sample["levels"]), 4), dtype=np.float32)
@@ -290,7 +232,6 @@ class RSNADataset(Dataset):
         if self.aug is not None:
             img, boxes = self.aug(img, boxes)
 
-        # Per-image z-score normalization.
         mean, std = float(img.mean()), float(img.std())
         img = (img - mean) / (std + 1e-6)
 
@@ -305,21 +246,14 @@ class RSNADataset(Dataset):
         }
 
 
-# --------------------------------------------------------------------------------------
-# Collate + splits
-# --------------------------------------------------------------------------------------
 def rsna_collate_fn(batch: List[Dict]) -> Dict:
-    """Collate variable-level samples into a single batch dict.
-
-    boxes -> (N_total, 5) with a leading batch-index column for ROI-Align.
-    """
-    images = torch.stack([b["image"] for b in batch], dim=0)  # (B, 3, H, W)
+    images = torch.stack([b["image"] for b in batch], dim=0)
 
     boxes_list, lvl_idx, lvl_type, targets, num_levels, study_ids = [], [], [], [], [], []
     for bi, b in enumerate(batch):
         k = b["num_levels"]
         bidx = torch.full((k, 1), float(bi))
-        boxes_list.append(torch.cat([bidx, b["boxes"]], dim=1))  # (k, 5)
+        boxes_list.append(torch.cat([bidx, b["boxes"]], dim=1))
         lvl_idx.append(b["level_indices"])
         lvl_type.append(b["level_types"])
         targets.append(b["targets"])
@@ -328,12 +262,12 @@ def rsna_collate_fn(batch: List[Dict]) -> Dict:
 
     return {
         "images": images,
-        "boxes": torch.cat(boxes_list, dim=0),          # (N_total, 5)
-        "level_indices": torch.cat(lvl_idx, dim=0),      # (N_total,)
-        "level_types": torch.cat(lvl_type, dim=0),       # (N_total,)
-        "targets": torch.cat(targets, dim=0),            # (N_total,)
-        "num_levels": num_levels,                        # list[int], len B
-        "study_ids": study_ids,                          # list[int], len B
+        "boxes": torch.cat(boxes_list, dim=0),
+        "level_indices": torch.cat(lvl_idx, dim=0),
+        "level_types": torch.cat(lvl_type, dim=0),
+        "targets": torch.cat(targets, dim=0),
+        "num_levels": num_levels,
+        "study_ids": study_ids,
     }
 
 
@@ -345,7 +279,6 @@ def make_rsna_splits(data_dir: str, config: Dict):
 
     samples = build_rsna_index(data_dir, config.get("task", "stenosis"))
 
-    # Split by study_id (patient) so no study appears in two splits.
     study_ids = sorted({s["study_id"] for s in samples})
     rng = np.random.RandomState(seed)
     rng.shuffle(study_ids)

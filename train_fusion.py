@@ -1,20 +1,3 @@
-"""Training entry point for the two-view (sagittal + axial) fusion grader — v2 Task 2.
-
-Reuses train.py's epoch loop / metrics wholesale; only the dataset (RSNAFusionDataset),
-the model (SpineFusionGrader), and the reporting differ. Canal-stenosis metrics are
-reported TWICE, as required: on the FULL test set and on the AXIAL-AVAILABLE subset (so a
-fusion gain is not confounded by which levels happen to have an axial slice).
-
-Modes:
-    --views sag                    # sagittal-only control (matched, un-augmented)
-    --views axial                  # axial-only
-    --views both --fusion concat   # fusion-A (early concat + proj)
-    --views both --fusion attn     # fusion-B (joint self-attention, view-embedding load-bearing)
-
-Example:
-    python train_fusion.py --data_dir data/rsna --views both --fusion attn --seed 42
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -36,9 +19,9 @@ def fusion_experiment_name(config: Dict) -> str:
     fus = f"_{config.get('fusion', 'attn')}" if views == "both" else ""
     ab = config.get("axial_box_size", 32)
     abs_tag = f"_ab{ab}" if ab != 32 else ""
-    aug_tag = "_aug" if config.get("augment") else ""   # never overwrite un-augmented runs
+    aug_tag = "_aug" if config.get("augment") else ""
     ks = int(config.get("sag_slices", 1))
-    sag_tag = f"_sag{ks}" if ks > 1 else ""             # parasagittal budget control
+    sag_tag = f"_sag{ks}" if ks > 1 else ""
     return (f"{config['dataset']}_fusion_{views}{fus}_{config['pos_encoding']}"
             f"_{config['embed_dim']}_{config['encoder_layers']}{abs_tag}{sag_tag}{aug_tag}_s{config['seed']}")
 
@@ -81,7 +64,6 @@ def _subset_metrics(test_res: Dict, cov_set: set, num_classes: int):
 def main():
     args = parse_args()
     config = load_config(vars(args))
-    # fusion-specific defaults not in default.yaml
     config.setdefault("views", "both")
     config.setdefault("fusion", "attn")
     config.setdefault("axial_box_size", config.get("box_size", 32))
@@ -149,7 +131,6 @@ def main():
                       f"{best_score:.3f} @ {best_epoch})")
                 break
 
-    # Test with best checkpoint; report FULL + axial-available-subset metrics.
     ckpt = torch.load(os.path.join(out_dir, "best_model.pt"), map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state"])
     test_res = evaluate_split(model, test_loader, criterion, device, config, desc="test", predict_fn=predict_fn)

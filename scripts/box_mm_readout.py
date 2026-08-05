@@ -1,14 +1,3 @@
-"""Box-size -> physical mm readout for BOTH views (v2 Task 2, pre-sweep).
-
-Pixel parity is not physical parity: a 32px box in 224-space covers a different mm
-extent on sagittal vs axial (different FOV / PixelSpacing). Before the box-size sweep we
-report, per view, what 16/24/32 px covers in mm across studies, so each view's sweep is
-interpreted in physical terms and the two views are compared at matched *physical* scale,
-not matched pixel scale.
-
-Run:  ./.venv/bin/python scripts/box_mm_readout.py --data_dir data/rsna
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -66,18 +55,16 @@ def main():
     sag = build_rsna_index(args.data_dir)
     axial = build_axial_index(args.data_dir)
 
-    # --- sagittal: representative slice per study ---
     sag_mm = []
     for s in sag:
         d = _slice_mm(args.data_dir, s["study_id"], s["series_id"], s["instance_number"], BOX_PX)
         if d is not None:
             sag_mm.append(d)
 
-    # --- axial: one representative covered level per study (canal slice) ---
     ax_mm = []
     ax_missing = 0
     for sid, levels in axial.items():
-        info = next(iter(levels.values()))  # any covered level's canal slice
+        info = next(iter(levels.values()))
         d = _slice_mm(args.data_dir, sid, info["series"], info["instance"], BOX_PX)
         if d is not None:
             ax_mm.append(d)
@@ -89,7 +76,6 @@ def main():
     if ax_missing:
         print(f"\n  [note] {ax_missing} axial studies had no readable representative slice on disk")
 
-    # matched-physical-scale hint: which axial px ~ 32px sagittal in mm?
     sag32 = np.median([0.5 * (d[32][0] + d[32][1]) for d in sag_mm])
     ax_med = {bp: np.median([0.5 * (d[bp][0] + d[bp][1]) for d in ax_mm]) for bp in BOX_PX}
     print(f"\n=== matched-physical readout ===")

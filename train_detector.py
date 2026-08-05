@@ -1,14 +1,3 @@
-"""Train the disc-level heatmap detector (MICCAI Task 1).
-
-Supervises 5-channel Gaussian heatmap regression on the RSNA coordinate annotations,
-reports localization error in millimeters (per level + within 5/10 mm), saves pred-vs-GT
-overlays, and exports predicted centers (original-image coords) so the grader can run with
-`--box_source detected`.
-
-Example:
-    python train_detector.py --data_dir data/rsna --epochs 60 --device mps --export
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -50,7 +39,7 @@ def evaluate(model, loader, device, scale, desc="val"):
             batch = move(batch, device)
             pred = model(batch["image"])
             total_loss += float(coord_loss(pred, batch["centers"] / scale, batch["valid"])); n += 1
-            pred_c = soft_argmax(pred) * scale                 # -> 224-space
+            pred_c = soft_argmax(pred) * scale
             err = localization_error_mm(pred_c, batch["centers"], batch["mm_scale"])
             report.update(err, batch["valid"])
     return total_loss / max(1, n), report.compute()
@@ -63,7 +52,7 @@ def save_overlays(model, dataset, device, scale, out_dir, n=20):
         item = dataset[i]
         with torch.no_grad():
             pred = model(item["image"].unsqueeze(0).to(device))
-            pred_c = (soft_argmax(pred) * scale)[0].cpu().numpy()  # (5,2) 224-space
+            pred_c = (soft_argmax(pred) * scale)[0].cpu().numpy()
         img = item["image"].numpy()
         disp = img[1] if img.ndim == 3 else img
         gt, valid = item["centers"].numpy(), item["valid"].numpy()
@@ -89,14 +78,14 @@ def export_detected_centers(model, data_dir, config, device, scale, out_path):
                         collate_fn=detector_collate_fn, num_workers=config.get("num_workers", 4))
     model.eval()
     detected: Dict[str, Dict[str, list]] = {}
-    per_study_err: Dict[str, float] = {}   # study_id -> mean mm localization error (for the mechanistic analysis)
+    per_study_err: Dict[str, float] = {}
     s = config.get("image_size", 224)
     with torch.no_grad():
         for batch in tqdm(loader, desc="export", leave=False):
-            pred_t = soft_argmax(model(batch["image"].to(device))) * scale   # (B,5,2) 224-space
-            err = localization_error_mm(pred_t.cpu(), batch["centers"], batch["mm_scale"])  # (B,5) mm
+            pred_t = soft_argmax(model(batch["image"].to(device))) * scale
+            err = localization_error_mm(pred_t.cpu(), batch["centers"], batch["mm_scale"])
             pred_c = pred_t.cpu().numpy()
-            oh = batch["orig_hw"].numpy()                        # (B,2) [H,W]
+            oh = batch["orig_hw"].numpy()
             valid = batch["valid"].bool()
             for b, sid in enumerate(batch["study_ids"]):
                 H, W = float(oh[b, 0]), float(oh[b, 1])
@@ -168,7 +157,6 @@ def main():
             torch.save({"model_state": model.state_dict(), "config": config, "epoch": epoch,
                         "out_size": out_size, "val": vrep}, os.path.join(out_dir, "best_detector.pt"))
 
-    # Final test evaluation with the best checkpoint.
     ckpt = torch.load(os.path.join(out_dir, "best_detector.pt"), map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state"])
     _, test_rep = evaluate(model, test_loader, device, scale, desc="test")

@@ -1,10 +1,3 @@
-"""Full Spine-ViT model assembly and the build_model() factory.
-
-Pipeline: backbone -> tokenizer -> encoder -> grading heads. The tokenizer and the
-encoder's positional-encoding are swappable via config, which is what the ablation
-study varies.
-"""
-
 from __future__ import annotations
 
 from typing import Dict
@@ -25,7 +18,6 @@ class SpineGrader(nn.Module):
         self.task = config.get("task", "stenosis")
 
         self.backbone = build_backbone(config)
-        # Keep tokenizer/encoder dims consistent with the actual backbone.
         config = dict(config)
         config["backbone_dim"] = getattr(self.backbone, "embed_dim", config.get("backbone_dim", 384))
         config["patch_size"] = getattr(self.backbone, "patch_size", config.get("patch_size", 14))
@@ -48,7 +40,6 @@ class SpineGrader(nn.Module):
         )
 
     def forward(self, batch: Dict) -> Dict:
-        # cast_crop uses its own ResNet on image crops; skip the (unused) DINOv2 forward.
         feature_map = None if self.config.get("tokenizer") == "cast_crop" else self.backbone(batch["images"])
         tokens = self.tokenizer(
             feature_map, batch["boxes"], batch["level_indices"], batch["num_levels"], images=batch["images"]
@@ -58,9 +49,9 @@ class SpineGrader(nn.Module):
         )
         logits, disc_mask = self.heads(encoded, batch["level_types"], task=self.task)
         return {
-            "logits": logits,                       # (N_disc, num_classes)
-            "disc_mask": disc_mask,                  # (N_total,) bool
-            "encoded_tokens": encoded,               # (N_total, embed_dim)
+            "logits": logits,
+            "disc_mask": disc_mask,
+            "encoded_tokens": encoded,
             "disc_level_indices": batch["level_indices"][disc_mask],
         }
 

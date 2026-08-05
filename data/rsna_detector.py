@@ -1,11 +1,3 @@
-"""Detector dataset — wraps RSNADataset so the detector sees the EXACT same preprocessed
-image the grader sees, plus the per-level centers (224-space), a valid mask, PixelSpacing
--> mm scale, and original dims (for exporting detected centers back to original coords).
-
-Reusing RSNADataset guarantees the oracle-vs-detected comparison differs only in the box
-center, never in preprocessing.
-"""
-
 from __future__ import annotations
 
 from typing import Dict, List
@@ -34,12 +26,11 @@ class RSNADetectorDataset(Dataset):
         ps = getattr(ds, "PixelSpacing", None)
         row_sp, col_sp = (float(ps[0]), float(ps[1])) if ps is not None else (1.0, 1.0)
         s = self.base.image_size
-        # mm per 224-px, per axis (x=col, y=row)
         mm_scale = np.array([(ow / s) * col_sp, (oh / s) * row_sp], dtype=np.float32)
         return mm_scale, np.array([oh, ow], dtype=np.int64)
 
     def __getitem__(self, idx: int) -> Dict:
-        g = self.base[idx]  # verified preprocessing (2.5D, resize, z-score; aug if base.aug)
+        g = self.base[idx]
         boxes = g["boxes"].numpy()
         lvl = g["level_indices"].numpy()
 
@@ -55,10 +46,10 @@ class RSNADetectorDataset(Dataset):
         mm_scale, orig_hw = self._mm_scale_and_dims(sample)
         return {
             "image": g["image"],
-            "centers": torch.from_numpy(centers),      # (5, 2) in 224-space
-            "valid": torch.from_numpy(valid),          # (5,)
-            "mm_scale": torch.from_numpy(mm_scale),    # (2,) mm per 224-px
-            "orig_hw": torch.from_numpy(orig_hw),      # (2,) original H, W
+            "centers": torch.from_numpy(centers),
+            "valid": torch.from_numpy(valid),
+            "mm_scale": torch.from_numpy(mm_scale),
+            "orig_hw": torch.from_numpy(orig_hw),
             "study_id": sample["study_id"],
         }
 

@@ -1,21 +1,3 @@
-"""SPIDER lumbar-spine dataset loader.
-
-SPIDER provides 3D MR volumes (.mha / .nii.gz) with ground-truth segmentation masks.
-We extract the mid-sagittal slice and derive one token per anatomical structure from
-the mask (or from an intensity heuristic when masks are unavailable). Unlike RSNA,
-SPIDER tokens interleave vertebral bodies (level_type=0) and discs (level_type=1),
-labeled bottom-up, and disc tokens carry a 5-class Pfirrmann grade.
-
-Mask label scheme (SPIDER):
-    0            background
-    1, 2, 3, ... vertebrae, bottom-up (1 = lowest)
-    100          spinal canal (excluded)
-    201, 202,... intervertebral discs, bottom-up (201 = lowest disc)
-
-The radiological gradings CSV keys discs by "IVD label" n, which corresponds to mask
-label 200 + n.
-"""
-
 from __future__ import annotations
 
 import os
@@ -35,9 +17,6 @@ DISC = 1
 IGNORE_INDEX = -1
 
 
-# --------------------------------------------------------------------------------------
-# Volume IO
-# --------------------------------------------------------------------------------------
 def load_volume(path: str) -> np.ndarray:
     """Load a 3D volume as (D, H, W) float32 via SimpleITK."""
     import SimpleITK as sitk
@@ -62,23 +41,15 @@ def bbox_from_mask(mask2d: np.ndarray, label: int, pad: int = 2) -> Optional[Lis
     return [x1, y1, x2, y2]
 
 
-# --------------------------------------------------------------------------------------
-# Intensity-profile heuristic (used when use_oracle_regions=False)
-# --------------------------------------------------------------------------------------
 def intensity_heuristic_regions(
     image2d: np.ndarray, box_h: int = 24, box_w_frac: float = 0.5, sigma: float = 7.0
 ) -> Tuple[List[List[float]], List[int]]:
-    """Estimate vertebra/disc regions from a midline vertical intensity profile.
-
-    Returns (boxes, level_types) interleaved bottom-up. Vertebral bodies are taken as
-    profile peaks and discs as the valleys between them (per instructions.md Step 3).
-    """
     from scipy.ndimage import gaussian_filter1d
     from scipy.signal import find_peaks
 
     h, w = image2d.shape
     cx = w // 2
-    half = max(1, w // 40)  # ~5px strip near midline
+    half = max(1, w // 40)
     strip = image2d[:, max(0, cx - half) : min(w, cx + half + 1)].mean(axis=1)
     strip = gaussian_filter1d(strip, sigma=sigma)
 
@@ -92,8 +63,6 @@ def intensity_heuristic_regions(
     def _box(yc):
         return [max(0.0, x1), max(0.0, yc - box_h / 2), min(float(w), x2), min(float(h), yc + box_h / 2)]
 
-    # Bottom-up: SimpleITK rows increase downward, so the bottom vertebra is the
-    # largest-y peak. Sort descending in y and interleave vertebra, disc, vertebra...
     peaks_bu = sorted(peaks, reverse=True)
     valleys_bu = sorted(valleys, reverse=True)
 
@@ -107,9 +76,6 @@ def intensity_heuristic_regions(
     return boxes, types
 
 
-# --------------------------------------------------------------------------------------
-# Gradings CSV
-# --------------------------------------------------------------------------------------
 def _load_gradings(data_dir: str) -> Dict[Tuple[int, int], int]:
     """Map (patient_id, ivd_label) -> Pfirrmann class in [0, 4], if a CSV is present."""
     import pandas as pd
@@ -137,20 +103,11 @@ def _load_gradings(data_dir: str) -> Dict[Tuple[int, int], int]:
             continue
         if np.isnan(grade):
             continue
-        mapping[(pid, ivd)] = int(round(grade)) - 1  # I..V -> 0..4
+        mapping[(pid, ivd)] = int(round(grade)) - 1
     return mapping
 
 
-# --------------------------------------------------------------------------------------
-# Sample discovery
-# --------------------------------------------------------------------------------------
 def build_spider_index(data_dir: str, sequence: str = "t2") -> List[Dict]:
-    """Discover (patient, image, mask) samples, preferring the given sequence.
-
-    Layout assumed (adjust to your download):
-        data_dir/images/*.mha   and   data_dir/masks/*.mha   with matching filenames,
-    falling back to files directly under data_dir.
-    """
     img_dir = os.path.join(data_dir, "images")
     mask_dir = os.path.join(data_dir, "masks")
     if not os.path.isdir(img_dir):
@@ -164,7 +121,6 @@ def build_spider_index(data_dir: str, sequence: str = "t2") -> List[Dict]:
         files.extend(glob.glob(os.path.join(img_dir, e)))
     files = sorted(f for f in files if "mask" not in os.path.basename(f).lower())
 
-    # Prefer the requested sequence; avoid the high-res SPACE variant if a plain one exists.
     def _seq_ok(name: str) -> bool:
         n = name.lower()
         return sequence in n and "t1" not in n.replace("t1rho", "")
@@ -181,27 +137,21 @@ def build_spider_index(data_dir: str, sequence: str = "t2") -> List[Dict]:
             pid = int(base.split("_")[0].split(".")[0])
         except ValueError:
             continue
-        # One volume per patient; prefer non-SPACE.
         if pid in seen_patient and "space" in base.lower():
             continue
         mask_path = os.path.join(mask_dir, base)
         if not os.path.exists(mask_path):
-            # try common mask suffixes
             alt = glob.glob(os.path.join(mask_dir, f"{pid}_*mask*")) or glob.glob(os.path.join(mask_dir, base))
             mask_path = alt[0] if alt else None
         samples.append({"patient_id": pid, "image_path": f, "mask_path": mask_path})
         seen_patient[pid] = f
 
-    # De-duplicate by patient, keeping the first (already sequence/space-filtered).
     dedup: Dict[int, Dict] = {}
     for s in samples:
         dedup.setdefault(s["patient_id"], s)
     return list(dedup.values())
 
 
-# --------------------------------------------------------------------------------------
-# Dataset
-# --------------------------------------------------------------------------------------
 class SPIDERDataset(Dataset):
     """SPIDER mid-sagittal dataset with interleaved vertebra/disc tokens."""
 
@@ -275,7 +225,6 @@ class SPIDERDataset(Dataset):
 
     def _heuristic_tokens(self, image2d: np.ndarray, pid: int):
         boxes, types = intensity_heuristic_regions(image2d)
-        # Assign Pfirrmann grades to discs bottom-up by IVD ordering.
         targets_map = self._targets_for_patient(pid)
         ivd_sorted = sorted(targets_map.keys())
         tgts, disc_i = [], 0
@@ -294,7 +243,7 @@ class SPIDERDataset(Dataset):
 
         vol = load_volume(sample["image_path"])
         mid = _mid_sagittal(vol)
-        img = self._load_image_slice(sample["image_path"], mid)  # (3, H0, W0)
+        img = self._load_image_slice(sample["image_path"], mid)
         _, h0, w0 = img.shape
 
         if self.use_oracle_regions and sample.get("mask_path"):
@@ -304,17 +253,16 @@ class SPIDERDataset(Dataset):
         else:
             boxes, types, tgts = self._heuristic_tokens(img[1], pid)
 
-        if len(boxes) == 0:  # safety: never emit an empty token set
+        if len(boxes) == 0:
             boxes = [[0.0, 0.0, float(w0), float(h0)]]
             types = [DISC]
             tgts = [IGNORE_INDEX]
 
         boxes = np.asarray(boxes, dtype=np.float32)
         level_types = np.asarray(types, dtype=np.int64)
-        level_indices = np.arange(len(types), dtype=np.int64)  # ordinal position, bottom-up
+        level_indices = np.arange(len(types), dtype=np.int64)
         targets = np.asarray(tgts, dtype=np.int64)
 
-        # Resize image + rescale boxes.
         sx = self.image_size / w0
         sy = self.image_size / h0
         img = _resize_chw(img, self.image_size, self.image_size)
@@ -338,9 +286,6 @@ class SPIDERDataset(Dataset):
         }
 
 
-# --------------------------------------------------------------------------------------
-# Collate + splits
-# --------------------------------------------------------------------------------------
 def spider_collate_fn(batch: List[Dict]) -> Dict:
     """Identical batch structure to RSNA's collate (boxes carry a batch-index column)."""
     images = torch.stack([b["image"] for b in batch], dim=0)

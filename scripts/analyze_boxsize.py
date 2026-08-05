@@ -1,9 +1,3 @@
-"""Box-size dose-response: κ (oracle vs detected) as the ROI shrinks toward the detector
-error. Widening oracle-vs-detected gap at small boxes = the robustness boundary.
-
-Reads anatomy+ordinal grading runs at box sizes {16,24,32,48} for both box sources.
-Usage: python analyze_boxsize.py --experiments_dir outputs_modal
-"""
 from __future__ import annotations
 
 import argparse
@@ -27,7 +21,7 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    vals = defaultdict(list)   # (source, box_size) -> [kappa per seed]
+    vals = defaultdict(list)
     for d in sorted(glob.glob(os.path.join(args.experiments_dir, "rsna_anatomy_ordinal_256_2*_s*"))):
         m = NAME_RE.match(os.path.basename(d))
         tr = os.path.join(d, "test_results.json")
@@ -53,9 +47,9 @@ def main():
         ax.errorbar(xs, ys, yerr=es, marker=mark, color=color, capsize=4, label=source, lw=2)
     for bs in sizes:
         o, det = vals.get(("oracle", bs)), vals.get(("detected", bs))
-        om = f"{np.mean(o):.3f}±{np.std(o):.3f}" if o else "—"
-        dm = f"{np.mean(det):.3f}±{np.std(det):.3f}" if det else "—"
-        gap = f"{np.mean(o)-np.mean(det):+.3f}" if (o and det) else "—"
+        om = f"{np.mean(o):.3f}±{np.std(o):.3f}" if o else "-"
+        dm = f"{np.mean(det):.3f}±{np.std(det):.3f}" if det else "-"
+        gap = f"{np.mean(o)-np.mean(det):+.3f}" if (o and det) else "-"
         print(f"{bs:>4} {om:>16} {dm:>16} {gap:>7}")
 
     ax.set_xlabel("Box extent (224-space px)")
