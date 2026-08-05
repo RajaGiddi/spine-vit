@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import os
 import sys
@@ -29,11 +27,13 @@ def overlay_study(data_dir, sid, levels, coords_sub, out_dir, box_px=64):
         try:
             img = load_axial_slice(data_dir, sid, info["series"], info["instance"])
         except Exception:
-            ax.set_title(f"{LEVELS[L]} (load fail)"); ax.axis("off"); continue
+            ax.set_title(f"{LEVELS[L]} (load fail)")
+            ax.axis("off")
+            continue
         ax.imshow(img, cmap="gray")
         rows = coords_sub[(coords_sub.study_id == sid) & (coords_sub.level == LEVELS[L])]
-        for _, r in rows.iterrows():
-            ax.plot(r.x, r.y, "r+", markersize=11, markeredgewidth=2)
+        for _, row in rows.iterrows():
+            ax.plot(row.x, row.y, "r+", markersize=11, markeredgewidth=2)
         cx, cy = info["cx"], info["cy"]
         ax.plot(cx, cy, "bx", markersize=10, markeredgewidth=2)
         ax.add_patch(patches.Rectangle((cx - box_px / 2, cy - box_px / 2), box_px, box_px,
@@ -48,23 +48,23 @@ def overlay_study(data_dir, sid, levels, coords_sub, out_dir, box_px=64):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data_dir", required=True)
-    ap.add_argument("--n", type=int, default=20)
-    ap.add_argument("--out_dir", default="outputs/eda_axial")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", required=True)
+    parser.add_argument("--n", type=int, default=20)
+    parser.add_argument("--out_dir", default="outputs/eda_axial")
+    args = parser.parse_args()
 
     sag = build_rsna_index(args.data_dir)
-    sag_ids = sorted({s["study_id"] for s in sag})
+    sag_ids = sorted({sample["study_id"] for sample in sag})
     axial = build_axial_index(args.data_dir)
 
-    cov = axial_coverage(axial, sag_ids)
-    print(f"\n=== Axial coverage vs sagittal cohort ({cov['n_studies']} studies) ===")
-    print(f"  any axial level : {cov['has_any_axial']} ({cov['pct_any']:.0f}%)")
-    print(f"  all 5 levels    : {cov['has_all5_axial']} ({cov['pct_all5']:.0f}%)")
-    print(f"  per level       : {cov['per_level_count']}")
-    if cov["pct_any"] < 70:
-        print("  [FLAG] <70% axial coverage - keep masked fusion, report canal metrics on full + axial subset")
+    coverage = axial_coverage(axial, sag_ids)
+    print(f"\n=== Axial coverage vs sagittal cohort ({coverage['n_studies']} studies) ===")
+    print(f"  any axial level : {coverage['has_any_axial']} ({coverage['pct_any']:.0f}%)")
+    print(f"  all 5 levels    : {coverage['has_all5_axial']} ({coverage['pct_all5']:.0f}%)")
+    print(f"  per level       : {coverage['per_level_count']}")
+    if coverage["pct_any"] < 70:
+        print("  <70% axial coverage - keep masked fusion, report canal metrics on full + axial subset")
 
     bad = axial_monotonicity_flags(axial)
     print(f"\n=== Slice provenance: instance# monotonic within series ===")
@@ -78,7 +78,7 @@ def main():
             on_disk += os.path.exists(p)
     print(f"\n=== Axial IMAGES on disk: {on_disk}/{tot} referenced slices ===")
     if on_disk == 0:
-        print("  [BLOCKED] axial images not downloaded - the visual gate + box-mm need them.")
+        print("  axial images not downloaded - the visual gate + box-mm need them.")
         print("  Re-export axial subarticular slices from a Kaggle notebook (as done for sagittal),")
         print("  then re-run this script. Coverage/provenance above are computed from CSVs only.")
         return
@@ -97,7 +97,7 @@ def main():
 
     coords = pd.read_csv(os.path.join(args.data_dir, "train_label_coordinates.csv"))
     sub = coords[coords.condition.isin([LEFT, RIGHT])]
-    with_all5 = [s for s in sag_ids if len(axial.get(s, {})) == 5][: args.n]
+    with_all5 = [sample for sample in sag_ids if len(axial.get(sample, {})) == 5][: args.n]
     print(f"\n=== Rendering {len(with_all5)} axial overlays -> {args.out_dir} (INSPECT ALL) ===")
     for sid in with_all5:
         overlay_study(args.data_dir, sid, axial[sid], sub, args.out_dir)

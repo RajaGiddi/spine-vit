@@ -1,7 +1,3 @@
-from __future__ import annotations
-
-from typing import Dict, List, Tuple
-
 import torch
 import torch.nn as nn
 
@@ -12,7 +8,7 @@ from .heads import GradingHeads
 
 
 class SpineFusionGrader(nn.Module):
-    def __init__(self, config: Dict):
+    def __init__(self, config):
         super().__init__()
         self.config = config
         self.task = config.get("task", "stenosis")
@@ -22,9 +18,12 @@ class SpineFusionGrader(nn.Module):
         embed_dim = config.get("embed_dim", 256)
 
         self.backbone = build_backbone(config)
+
         config = dict(config)
-        config["backbone_dim"] = getattr(self.backbone, "embed_dim", config.get("backbone_dim", 384))
-        config["patch_size"] = getattr(self.backbone, "patch_size", config.get("patch_size", 14))
+        config["backbone_dim"] = getattr(self.backbone, "embed_dim",
+                                         config.get("backbone_dim", 384))
+        config["patch_size"] = getattr(self.backbone, "patch_size",
+                                       config.get("patch_size", 14))
         config["tokenizer"] = "anatomy"
         self.tokenizer = build_tokenizer(config)
 
@@ -50,110 +49,132 @@ class SpineFusionGrader(nn.Module):
 
         if self.fusion == "concat" and self.views == "both":
             self.concat_proj = nn.Sequential(
-                nn.Linear(2 * embed_dim, embed_dim), nn.GELU(), nn.LayerNorm(embed_dim)
+                nn.Linear(2 * embed_dim, embed_dim),
+                nn.GELU(),
+                nn.LayerNorm(embed_dim),
             )
 
-    def _sag_tokens(self, batch: Dict) -> torch.Tensor:
+    def sag_tokens(self, batch):
         if self.sag_slices > 1 and "sag_multi_images" in batch:
-            return self._sag_tokens_multi(batch)
-        fmap = self.backbone(batch["images"])
-        return self.tokenizer(fmap, batch["boxes"], batch["level_indices"],
+            return self.sag_tokens_multi(batch)
+
+        feature_map = self.backbone(batch["images"])
+        return self.tokenizer(feature_map, batch["boxes"], batch["level_indices"],
                               batch["num_levels"], images=batch["images"])
 
-    def _sag_tokens_multi(self, batch: Dict) -> torch.Tensor:
+    def sag_tokens_multi(self, batch):
         multi = batch["sag_multi_images"]
-        K = multi.shape[1]
-        acc = None
-        for j in range(K):
-            fmap = self.backbone(multi[:, j])
-            tok = self.tokenizer(fmap, batch["boxes"], batch["level_indices"],
-                                 batch["num_levels"], images=multi[:, j])
-            acc = tok if acc is None else acc + tok
-        return acc / K
+        num_slices = multi.shape[1]
 
-    def _axial_tokens(self, batch: Dict) -> torch.Tensor:
-        """(M, D) axial tokens, one per covered level, ordered study-by-study. Empty if none."""
-        ax_imgs = batch["axial_images"]
-        if ax_imgs.shape[0] == 0:
-            return ax_imgs.new_zeros(0, self.view_embedding.embedding_dim)
-        fmap = self.backbone(ax_imgs)
-        return self.tokenizer(fmap, batch["axial_boxes"], batch["axial_level_indices"],
-                              None, images=ax_imgs)
+        total = None
+        for j in range(num_slices):
+            slice_images = multi[:, j]
+            feature_map = self.backbone(slice_images)
+            tokens = self.tokenizer(feature_map, batch["boxes"], batch["level_indices"],
+                                    batch["num_levels"], images=slice_images)
+            if total is None:
+                total = tokens
+            else:
+                total = total + tokens
 
-    def _axial_aligned(self, ax_tokens: torch.Tensor, slot: torch.Tensor,
-                       n_total: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        cov = slot >= 0
+        return total / num_slices
+
+    def axial_tokens(self, batch):
+        axial_images = batch["axial_images"]
+        if axial_images.shape[0] == 0:
+            return axial_images.new_zeros(0, self.view_embedding.embedding_dim)
+
+        feature_map = self.backbone(axial_images)
+        return self.tokenizer(feature_map, batch["axial_boxes"],
+                              batch["axial_level_indices"], None, images=axial_images)
+
+    def align_axial(self, axial_tokens, slot, n_total):
+        covered = slot >= 0
         aligned = self.missing_axial.unsqueeze(0).expand(n_total, -1).clone()
-        if cov.any() and ax_tokens.shape[0] > 0:
-            aligned[cov] = ax_tokens[slot[cov]]
-        return aligned, cov
+        if covered.any() and axial_tokens.shape[0] > 0:
+            aligned[covered] = axial_tokens[slot[covered]]
+        return aligned, covered
 
-    def _emb(self, view_id: int, ref: torch.Tensor) -> torch.Tensor:
-        idx = torch.full((ref.shape[0],), view_id, dtype=torch.long, device=ref.device)
-        return self.view_embedding(idx)
+    def view_embed(self, view_id, reference):
+        indices = torch.full((reference.shape[0],), view_id, dtype=torch.long,
+                             device=reference.device)
+        return self.view_embedding(indices)
 
-    def _attn_forward(self, batch: Dict, sag: torch.Tensor, ax: torch.Tensor):
-        num_levels: List[int] = batch["num_levels"]
-        axial_num: List[int] = batch["axial_num"]
-        lvl_sag = batch["level_indices"]
-        lvl_ax = batch["axial_level_indices"]
+    def attention_forward(self, batch, sag, axial):
+        num_levels = batch["num_levels"]
+        axial_num = batch["axial_num"]
 
-        sag = sag + self._emb(0, sag)
-        if ax.shape[0] > 0:
-            ax = ax + self._emb(1, ax)
+        sag = sag + self.view_embed(0, sag)
+        if axial.shape[0] > 0:
+            axial = axial + self.view_embed(1, axial)
 
-        comb_tokens, comb_lvl, comb_num, sag_readout = [], [], [], []
-        sag_off = ax_off = run = 0
-        for k, na in zip(num_levels, axial_num):
-            comb_tokens.append(sag[sag_off:sag_off + k])
-            comb_lvl.append(lvl_sag[sag_off:sag_off + k])
-            sag_readout.extend(range(run, run + k))
-            run += k
-            if na > 0:
-                comb_tokens.append(ax[ax_off:ax_off + na])
-                comb_lvl.append(lvl_ax[ax_off:ax_off + na])
-                run += na
-            comb_num.append(k + na)
-            sag_off += k
-            ax_off += na
+        combined_tokens = []
+        combined_levels = []
+        combined_counts = []
+        readout_positions = []
 
-        comb = torch.cat(comb_tokens, 0)
-        comb_lvl_idx = torch.cat(comb_lvl, 0)
-        comb_types = torch.ones_like(comb_lvl_idx)
-        encoded = self.encoder(comb, comb_lvl_idx, comb_types, comb_num)
-        readout = torch.tensor(sag_readout, dtype=torch.long, device=encoded.device)
+        sag_offset = 0
+        axial_offset = 0
+        position = 0
+
+        for i in range(len(num_levels)):
+            count = num_levels[i]
+            axial_count = axial_num[i]
+
+            combined_tokens.append(sag[sag_offset:sag_offset + count])
+            combined_levels.append(batch["level_indices"][sag_offset:sag_offset + count])
+            for j in range(count):
+                readout_positions.append(position + j)
+            position = position + count
+
+            if axial_count > 0:
+                combined_tokens.append(axial[axial_offset:axial_offset + axial_count])
+                combined_levels.append(
+                    batch["axial_level_indices"][axial_offset:axial_offset + axial_count])
+                position = position + axial_count
+
+            combined_counts.append(count + axial_count)
+            sag_offset = sag_offset + count
+            axial_offset = axial_offset + axial_count
+
+        tokens = torch.cat(combined_tokens, 0)
+        level_indices = torch.cat(combined_levels, 0)
+        level_types = torch.ones_like(level_indices)
+
+        encoded = self.encoder(tokens, level_indices, level_types, combined_counts)
+        readout = torch.tensor(readout_positions, dtype=torch.long, device=encoded.device)
         return encoded[readout]
 
-    def forward(self, batch: Dict) -> Dict:
+    def forward(self, batch):
         n_total = batch["level_indices"].shape[0]
         level_indices = batch["level_indices"]
         level_types = batch["level_types"]
         num_levels = batch["num_levels"]
 
         if self.views == "sag":
-            sag = self._sag_tokens(batch)
-            fused = sag + self._emb(0, sag)
+            sag = self.sag_tokens(batch)
+            fused = sag + self.view_embed(0, sag)
             encoded = self.encoder(fused, level_indices, level_types, num_levels)
 
         elif self.views == "axial":
-            ax = self._axial_tokens(batch)
-            aligned, _ = self._axial_aligned(ax, batch["axial_slot"], n_total)
-            fused = aligned + self._emb(1, aligned)
+            axial = self.axial_tokens(batch)
+            aligned, covered = self.align_axial(axial, batch["axial_slot"], n_total)
+            fused = aligned + self.view_embed(1, aligned)
             encoded = self.encoder(fused, level_indices, level_types, num_levels)
 
         elif self.fusion == "concat":
-            sag = self._sag_tokens(batch)
-            ax = self._axial_tokens(batch)
-            aligned, _ = self._axial_aligned(ax, batch["axial_slot"], n_total)
-            sag = sag + self._emb(0, sag)
-            aligned = aligned + self._emb(1, aligned)
+            sag = self.sag_tokens(batch)
+            axial = self.axial_tokens(batch)
+            aligned, covered = self.align_axial(axial, batch["axial_slot"], n_total)
+            sag = sag + self.view_embed(0, sag)
+            aligned = aligned + self.view_embed(1, aligned)
             fused = self.concat_proj(torch.cat([sag, aligned], dim=-1))
             encoded = self.encoder(fused, level_indices, level_types, num_levels)
 
         else:
-            sag = self._sag_tokens(batch)
-            ax = self._axial_tokens(batch)
-            encoded = self._attn_forward(batch, sag, ax)
+            sag = self.sag_tokens(batch)
+            axial = self.axial_tokens(batch)
+            encoded = self.attention_forward(batch, sag, axial)
 
         logits, disc_mask = self.heads(encoded, level_types, task=self.task)
         return {
@@ -163,9 +184,13 @@ class SpineFusionGrader(nn.Module):
             "disc_level_indices": level_indices[disc_mask],
         }
 
-    def count_trainable_params(self) -> int:
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    def count_trainable_params(self):
+        total = 0
+        for parameter in self.parameters():
+            if parameter.requires_grad:
+                total = total + parameter.numel()
+        return total
 
 
-def build_fusion_model(config: Dict) -> SpineFusionGrader:
+def build_fusion_model(config):
     return SpineFusionGrader(config)

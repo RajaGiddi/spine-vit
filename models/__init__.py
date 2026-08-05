@@ -1,5 +1,3 @@
-"""Model components for Spine-ViT."""
-
 from .backbone import DINOv2Backbone, MockBackbone, build_backbone
 from .tokenizer import AnatomyTokenizer, UniformStripTokenizer, PatchTokenizer, CASTCropTokenizer, build_tokenizer
 from .encoder import (

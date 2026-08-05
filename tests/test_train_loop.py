@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 import sys
 
@@ -15,25 +13,23 @@ from utils.metrics import compute_class_weights, compute_metrics, LevelAttributi
 from train import run_epoch, move_batch
 
 NUM_CLASSES = 3
-IMG = 224
+IMAGE_SIZE = 224
 
 
 class SyntheticSpineDataset(Dataset):
-    """Fixed synthetic samples in the exact per-sample format the RSNA dataset emits."""
-
     def __init__(self, n=8, k=5, seed=0):
-        rng = np.random.RandomState(seed)
+        random_state = np.random.RandomState(seed)
         self.items = []
         for i in range(n):
-            img = torch.from_numpy(rng.randn(3, IMG, IMG).astype(np.float32))
-            centers = rng.uniform(40, IMG - 40, size=(k, 2))
+            image = torch.from_numpy(random_state.randn(3, IMAGE_SIZE, IMAGE_SIZE).astype(np.float32))
+            centers = random_state.uniform(40, IMAGE_SIZE - 40, size=(k, 2))
             boxes = np.stack(
                 [centers[:, 0] - 20, centers[:, 1] - 20, centers[:, 0] + 20, centers[:, 1] + 20], axis=1
             ).astype(np.float32)
-            targets = rng.randint(0, NUM_CLASSES, size=k).astype(np.int64)
+            targets = random_state.randint(0, NUM_CLASSES, size=k).astype(np.int64)
             self.items.append(
                 {
-                    "image": img,
+                    "image": image,
                     "boxes": torch.from_numpy(boxes),
                     "level_indices": torch.arange(k, dtype=torch.long),
                     "level_types": torch.ones(k, dtype=torch.long),
@@ -57,7 +53,7 @@ def config():
     return {
         "backbone": "mock", "backbone_dim": 384, "patch_size": 14, "freeze_backbone": True,
         "embed_dim": 256, "encoder_layers": 2, "encoder_heads": 4, "dropout": 0.0,
-        "max_levels": 24, "image_size": IMG, "roi_output_size": 7,
+        "max_levels": 24, "image_size": IMAGE_SIZE, "roi_output_size": 7,
         "num_stenosis_classes": NUM_CLASSES, "num_pfirrmann_classes": 5,
         "task": "stenosis", "grad_clip": 1.0, "num_classes": NUM_CLASSES,
     }
@@ -68,13 +64,13 @@ def main():
     device = torch.device("cpu")
     cfg = config()
 
-    ds = SyntheticSpineDataset(n=8, k=5)
-    loader = DataLoader(ds, batch_size=4, shuffle=True, collate_fn=rsna_collate_fn)
+    dataset = SyntheticSpineDataset(n=8, k=5)
+    loader = DataLoader(dataset, batch_size=4, shuffle=True, collate_fn=rsna_collate_fn)
 
     model = build_model(cfg).to(device)
     print(f"trainable params: {model.count_trainable_params()/1e6:.3f}M")
 
-    weights = compute_class_weights(ds, NUM_CLASSES).to(device)
+    weights = compute_class_weights(dataset, NUM_CLASSES).to(device)
     print(f"class weights: {weights.tolist()}")
     criterion = torch.nn.CrossEntropyLoss(weight=weights, ignore_index=-1)
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-3)

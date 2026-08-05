@@ -1,62 +1,66 @@
-from __future__ import annotations
-
 import os
-from typing import List, Dict, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from .transforms import SpineAugmentation
+from .transforms import SpineAugmentation, resize_channels
 
 LEVELS = ["L1/L2", "L2/L3", "L3/L4", "L4/L5", "L5/S1"]
-LEVEL_TO_IDX = {lv: i for i, lv in enumerate(LEVELS)}
-LEVEL_TO_COL = {lv: lv.lower().replace("/", "_") for lv in LEVELS}
+
+LEVEL_TO_IDX = {}
+LEVEL_TO_COL = {}
+for i in range(len(LEVELS)):
+    LEVEL_TO_IDX[LEVELS[i]] = i
+    LEVEL_TO_COL[LEVELS[i]] = LEVELS[i].lower().replace("/", "_")
 
 SEVERITY_MAP = {"Normal/Mild": 0, "Moderate": 1, "Severe": 2}
 STENOSIS_CONDITION = "Spinal Canal Stenosis"
 IGNORE_INDEX = -1
 
 
-def load_dicom_slice(path: str) -> np.ndarray:
+def minmax(pixels):
+    low = float(pixels.min())
+    high = float(pixels.max())
+    return (pixels - low) / (high - low + 1e-8)
+
+
+def first_value(value):
     import pydicom
 
-    ds = pydicom.dcmread(path)
-    arr = ds.pixel_array.astype(np.float32)
+    if isinstance(value, pydicom.multival.MultiValue):
+        return float(value[0])
+    return float(value)
 
-    slope = float(getattr(ds, "RescaleSlope", 1.0) or 1.0)
-    intercept = float(getattr(ds, "RescaleIntercept", 0.0) or 0.0)
-    arr = arr * slope + intercept
 
-    def _first(v):
-        import pydicom as _pd
+def load_dicom_slice(path):
+    import pydicom
 
-        if isinstance(v, _pd.multival.MultiValue):
-            return float(v[0])
-        return float(v)
+    dicom = pydicom.dcmread(path)
+    pixels = dicom.pixel_array.astype(np.float32)
 
-    if hasattr(ds, "WindowCenter") and hasattr(ds, "WindowWidth"):
+    slope = float(getattr(dicom, "RescaleSlope", 1.0) or 1.0)
+    intercept = float(getattr(dicom, "RescaleIntercept", 0.0) or 0.0)
+    pixels = pixels * slope + intercept
+
+    if hasattr(dicom, "WindowCenter") and hasattr(dicom, "WindowWidth"):
         try:
-            center = _first(ds.WindowCenter)
-            width = _first(ds.WindowWidth)
-            lower, upper = center - width / 2.0, center + width / 2.0
-            arr = np.clip(arr, lower, upper)
-            arr = (arr - lower) / (upper - lower + 1e-8)
+            center = first_value(dicom.WindowCenter)
+            width = first_value(dicom.WindowWidth)
+            lower = center - width / 2.0
+            upper = center + width / 2.0
+            pixels = np.clip(pixels, lower, upper)
+            pixels = (pixels - lower) / (upper - lower + 1e-8)
         except Exception:
-            arr = _minmax(arr)
+            pixels = minmax(pixels)
     else:
-        arr = _minmax(arr)
-    return arr
+        pixels = minmax(pixels)
+
+    return pixels
 
 
-def _minmax(arr: np.ndarray) -> np.ndarray:
-    lo, hi = float(arr.min()), float(arr.max())
-    return (arr - lo) / (hi - lo + 1e-8)
-
-
-def coord_to_box(x, y, box_size, img_h, img_w) -> List[float]:
-    """Convert a center point (x, y) to a clamped [x1, y1, x2, y2] box."""
+def coord_to_box(x, y, box_size, img_h, img_w):
     half = box_size / 2.0
     x1 = max(0.0, x - half)
     y1 = max(0.0, y - half)
@@ -65,12 +69,8 @@ def coord_to_box(x, y, box_size, img_h, img_w) -> List[float]:
     return [x1, y1, x2, y2]
 
 
-def build_rsna_index(
-    data_dir: str,
-    task: str = "stenosis",
-    condition: str = STENOSIS_CONDITION,
-    require_images: bool = True,
-) -> List[Dict]:
+def build_rsna_index(data_dir, task="stenosis", condition=STENOSIS_CONDITION,
+                     require_images=True):
     train_csv = pd.read_csv(os.path.join(data_dir, "train.csv"))
     desc_csv = pd.read_csv(os.path.join(data_dir, "train_series_descriptions.csv"))
     coord_csv = pd.read_csv(os.path.join(data_dir, "train_label_coordinates.csv"))
@@ -78,87 +78,78 @@ def build_rsna_index(
 
     train_csv = train_csv.set_index("study_id")
 
-    is_sagt2 = desc_csv["series_description"].str.contains("sagittal t2", case=False, na=False)
-    sagt2 = desc_csv[is_sagt2]
-    study_to_series: Dict[int, List[int]] = (
-        sagt2.groupby("study_id")["series_id"].apply(list).to_dict()
-    )
+    is_sagittal_t2 = desc_csv["series_description"].str.contains("sagittal t2", case=False,
+                                                                 na=False)
+    sagittal = desc_csv[is_sagittal_t2]
+    study_to_series = sagittal.groupby("study_id")["series_id"].apply(list).to_dict()
 
-    coord_cond = coord_csv[coord_csv["condition"] == condition]
+    condition_coords = coord_csv[coord_csv["condition"] == condition]
 
-    samples: List[Dict] = []
-    for study_id, series_ids in study_to_series.items():
+    samples = []
+    for study_id in study_to_series:
+        series_ids = study_to_series[study_id]
+
         if require_images and not os.path.isdir(os.path.join(image_root, str(study_id))):
             continue
-        study_coords = coord_cond[
-            (coord_cond["study_id"] == study_id) & (coord_cond["series_id"].isin(series_ids))
-        ]
+
+        same_study = condition_coords["study_id"] == study_id
+        same_series = condition_coords["series_id"].isin(series_ids)
+        study_coords = condition_coords[same_study & same_series]
         if len(study_coords) == 0:
             continue
 
         best_series = study_coords["series_id"].value_counts().idxmax()
         series_coords = study_coords[study_coords["series_id"] == best_series]
-
         instance_number = int(series_coords["instance_number"].value_counts().idxmax())
 
-        if require_images and not os.path.exists(
-            os.path.join(image_root, str(study_id), str(best_series), f"{instance_number}.dcm")
-        ):
-            continue
+        if require_images:
+            slice_path = os.path.join(image_root, str(study_id), str(best_series),
+                                      str(instance_number) + ".dcm")
+            if not os.path.exists(slice_path):
+                continue
 
-        grades = train_csv.loc[study_id] if study_id in train_csv.index else None
+        if study_id in train_csv.index:
+            grades = train_csv.loc[study_id]
+        else:
+            grades = None
 
         levels = []
-        for lv in LEVELS:
-            rows = series_coords[series_coords["level"] == lv]
+        for level_name in LEVELS:
+            rows = series_coords[series_coords["level"] == level_name]
             if len(rows) == 0:
                 continue
             row = rows.iloc[0]
-            level_idx = LEVEL_TO_IDX[lv]
 
             target = IGNORE_INDEX
             if grades is not None:
-                col = f"spinal_canal_stenosis_{LEVEL_TO_COL[lv]}"
-                if col in grades.index and pd.notna(grades[col]):
-                    target = SEVERITY_MAP.get(str(grades[col]).strip(), IGNORE_INDEX)
+                column = "spinal_canal_stenosis_" + LEVEL_TO_COL[level_name]
+                if column in grades.index and pd.notna(grades[column]):
+                    target = SEVERITY_MAP.get(str(grades[column]).strip(), IGNORE_INDEX)
 
-            levels.append(
-                {
-                    "level_idx": level_idx,
-                    "x": float(row["x"]),
-                    "y": float(row["y"]),
-                    "target": int(target),
-                }
-            )
+            levels.append({
+                "level_idx": LEVEL_TO_IDX[level_name],
+                "x": float(row["x"]),
+                "y": float(row["y"]),
+                "target": int(target),
+            })
 
         if len(levels) == 0:
             continue
-        samples.append(
-            {
-                "study_id": int(study_id),
-                "series_id": int(best_series),
-                "instance_number": instance_number,
-                "levels": levels,
-            }
-        )
+
+        samples.append({
+            "study_id": int(study_id),
+            "series_id": int(best_series),
+            "instance_number": instance_number,
+            "levels": levels,
+        })
+
     return samples
 
 
 class RSNADataset(Dataset):
-    """RSNA sagittal-T2 spinal-canal-stenosis dataset (level-wise 3-class grading)."""
-
-    def __init__(
-        self,
-        data_dir: str,
-        samples: Optional[List[Dict]] = None,
-        image_size: int = 224,
-        box_size: int = 32,
-        use_25d: bool = True,
-        augment: bool = False,
-        task: str = "stenosis",
-        box_source: str = "oracle",
-        detected_centers: Optional[Dict] = None,
-    ):
+    def __init__(self, data_dir, samples=None, image_size=224, box_size=32, use_25d=True,
+                 augment=False, task="stenosis", box_source="oracle",
+                 detected_centers=None):
         self.data_dir = data_dir
         self.image_root = os.path.join(data_dir, "train_images")
         self.image_size = image_size
@@ -167,76 +158,107 @@ class RSNADataset(Dataset):
         self.task = task
         self.box_source = box_source
         self.detected_centers = detected_centers
-        self.samples = samples if samples is not None else build_rsna_index(data_dir, task)
-        self.aug = SpineAugmentation(image_size=image_size) if augment else None
 
-    def __len__(self) -> int:
+        if samples is not None:
+            self.samples = samples
+        else:
+            self.samples = build_rsna_index(data_dir, task)
+
+        if augment:
+            self.aug = SpineAugmentation(image_size=image_size)
+        else:
+            self.aug = None
+
+    def __len__(self):
         return len(self.samples)
 
-    def get_all_targets(self) -> np.ndarray:
-        out = []
-        for s in self.samples:
-            out.extend(lv["target"] for lv in s["levels"])
-        return np.asarray(out, dtype=np.int64)
+    def get_all_targets(self):
+        targets = []
+        for sample in self.samples:
+            for level in sample["levels"]:
+                targets.append(level["target"])
+        return np.asarray(targets, dtype=np.int64)
 
-    def _dicom_path(self, study_id, series_id, instance) -> str:
-        return os.path.join(self.image_root, str(study_id), str(series_id), f"{instance}.dcm")
+    def dicom_path(self, study_id, series_id, instance):
+        return os.path.join(self.image_root, str(study_id), str(series_id),
+                            str(instance) + ".dcm")
 
-    def _load_image(self, sample: Dict) -> np.ndarray:
-        """Return a (3, H0, W0) float32 array at ORIGINAL resolution (2.5D or repeated)."""
-        study_id, series_id = sample["study_id"], sample["series_id"]
-        inst = sample["instance_number"]
-        center = load_dicom_slice(self._dicom_path(study_id, series_id, inst))
+    def load_image(self, sample):
+        study_id = sample["study_id"]
+        series_id = sample["series_id"]
+        instance = sample["instance_number"]
 
-        if self.use_25d:
-            chans = []
-            for off in (-1, 0, 1):
-                p = self._dicom_path(study_id, series_id, inst + off)
-                if off != 0 and os.path.exists(p):
-                    sl = load_dicom_slice(p)
-                    if sl.shape != center.shape:
-                        sl = center
-                else:
-                    sl = center
-                chans.append(sl)
-            return np.stack(chans, axis=0)
-        return np.stack([center, center, center], axis=0)
+        center = load_dicom_slice(self.dicom_path(study_id, series_id, instance))
 
-    def __getitem__(self, idx: int) -> Dict:
+        if not self.use_25d:
+            return np.stack([center, center, center], axis=0)
+
+        channels = []
+        for offset in [-1, 0, 1]:
+            path = self.dicom_path(study_id, series_id, instance + offset)
+            if offset != 0 and os.path.exists(path):
+                neighbour = load_dicom_slice(path)
+                if neighbour.shape != center.shape:
+                    neighbour = center
+            else:
+                neighbour = center
+            channels.append(neighbour)
+
+        return np.stack(channels, axis=0)
+
+    def get_centers(self, sample):
+        if self.box_source == "detected" and self.detected_centers is not None:
+            return self.detected_centers.get(str(sample["study_id"]), {})
+        return {}
+
+    def __getitem__(self, idx):
         sample = self.samples[idx]
-        img = self._load_image(sample)
-        _, h0, w0 = img.shape
+        image = self.load_image(sample)
+        original_height = image.shape[1]
+        original_width = image.shape[2]
 
-        level_indices = np.array([lv["level_idx"] for lv in sample["levels"]], dtype=np.int64)
+        level_indices = []
+        targets = []
+        for level in sample["levels"]:
+            level_indices.append(level["level_idx"])
+            targets.append(level["target"])
+        level_indices = np.array(level_indices, dtype=np.int64)
+        targets = np.array(targets, dtype=np.int64)
         level_types = np.ones(len(sample["levels"]), dtype=np.int64)
-        targets = np.array([lv["target"] for lv in sample["levels"]], dtype=np.int64)
 
-        from .transforms import _resize_chw
-
-        sx = self.image_size / w0
-        sy = self.image_size / h0
-        img = _resize_chw(img, self.image_size, self.image_size)
+        scale_x = self.image_size / original_width
+        scale_y = self.image_size / original_height
+        image = resize_channels(image, self.image_size, self.image_size)
 
         half = self.box_size / 2.0
-        S = float(self.image_size)
-        det = self.detected_centers.get(str(sample["study_id"]), {}) \
-            if (self.box_source == "detected" and self.detected_centers is not None) else {}
+        size = float(self.image_size)
+        detected = self.get_centers(sample)
+
         boxes = np.zeros((len(sample["levels"]), 4), dtype=np.float32)
-        for i, lv in enumerate(sample["levels"]):
-            xy = det.get(str(lv["level_idx"]))
-            x, y = (xy[0], xy[1]) if xy is not None else (lv["x"], lv["y"])
-            cx, cy = x * sx, y * sy
-            boxes[i] = [max(0.0, cx - half), max(0.0, cy - half),
-                        min(S, cx + half), min(S, cy + half)]
+        for i in range(len(sample["levels"])):
+            level = sample["levels"][i]
+            point = detected.get(str(level["level_idx"]))
+            if point is not None:
+                x = point[0]
+                y = point[1]
+            else:
+                x = level["x"]
+                y = level["y"]
+
+            center_x = x * scale_x
+            center_y = y * scale_y
+            boxes[i] = [max(0.0, center_x - half), max(0.0, center_y - half),
+                        min(size, center_x + half), min(size, center_y + half)]
 
         if self.aug is not None:
-            img, boxes = self.aug(img, boxes)
+            image, boxes = self.aug(image, boxes)
 
-        mean, std = float(img.mean()), float(img.std())
-        img = (img - mean) / (std + 1e-6)
+        mean = float(image.mean())
+        std = float(image.std())
+        image = (image - mean) / (std + 1e-6)
 
         return {
-            "image": torch.from_numpy(np.ascontiguousarray(img)).float(),
+            "image": torch.from_numpy(np.ascontiguousarray(image)).float(),
             "boxes": torch.from_numpy(boxes).float(),
             "level_indices": torch.from_numpy(level_indices).long(),
             "level_types": torch.from_numpy(level_types).long(),
@@ -246,64 +268,91 @@ class RSNADataset(Dataset):
         }
 
 
-def rsna_collate_fn(batch: List[Dict]) -> Dict:
-    images = torch.stack([b["image"] for b in batch], dim=0)
+def rsna_collate_fn(batch):
+    images = []
+    for item in batch:
+        images.append(item["image"])
+    images = torch.stack(images, dim=0)
 
-    boxes_list, lvl_idx, lvl_type, targets, num_levels, study_ids = [], [], [], [], [], []
-    for bi, b in enumerate(batch):
-        k = b["num_levels"]
-        bidx = torch.full((k, 1), float(bi))
-        boxes_list.append(torch.cat([bidx, b["boxes"]], dim=1))
-        lvl_idx.append(b["level_indices"])
-        lvl_type.append(b["level_types"])
-        targets.append(b["targets"])
-        num_levels.append(k)
-        study_ids.append(b["study_id"])
+    all_boxes = []
+    all_level_indices = []
+    all_level_types = []
+    all_targets = []
+    num_levels = []
+    study_ids = []
+
+    for i in range(len(batch)):
+        item = batch[i]
+        count = item["num_levels"]
+
+        batch_column = torch.full((count, 1), float(i))
+        all_boxes.append(torch.cat([batch_column, item["boxes"]], dim=1))
+
+        all_level_indices.append(item["level_indices"])
+        all_level_types.append(item["level_types"])
+        all_targets.append(item["targets"])
+        num_levels.append(count)
+        study_ids.append(item["study_id"])
 
     return {
         "images": images,
-        "boxes": torch.cat(boxes_list, dim=0),
-        "level_indices": torch.cat(lvl_idx, dim=0),
-        "level_types": torch.cat(lvl_type, dim=0),
-        "targets": torch.cat(targets, dim=0),
+        "boxes": torch.cat(all_boxes, dim=0),
+        "level_indices": torch.cat(all_level_indices, dim=0),
+        "level_types": torch.cat(all_level_types, dim=0),
+        "targets": torch.cat(all_targets, dim=0),
         "num_levels": num_levels,
         "study_ids": study_ids,
     }
 
 
-def make_rsna_splits(data_dir: str, config: Dict):
-    """Build patient-level train/val/test RSNADataset splits (70/15/15 by default)."""
+def split_study_ids(samples, seed, val_frac, test_frac):
+    study_ids = set()
+    for sample in samples:
+        study_ids.add(sample["study_id"])
+    study_ids = sorted(study_ids)
+
+    random_state = np.random.RandomState(seed)
+    random_state.shuffle(study_ids)
+
+    total = len(study_ids)
+    n_test = int(round(total * test_frac))
+    n_val = int(round(total * val_frac))
+
+    test_ids = set(study_ids[:n_test])
+    val_ids = set(study_ids[n_test:n_test + n_val])
+    return val_ids, test_ids
+
+
+def make_rsna_splits(data_dir, config):
     seed = config.get("seed", 42)
     val_frac = config.get("val_frac", 0.15)
     test_frac = config.get("test_frac", 0.15)
 
     samples = build_rsna_index(data_dir, config.get("task", "stenosis"))
+    val_ids, test_ids = split_study_ids(samples, seed, val_frac, test_frac)
 
-    study_ids = sorted({s["study_id"] for s in samples})
-    rng = np.random.RandomState(seed)
-    rng.shuffle(study_ids)
-    n = len(study_ids)
-    n_test = int(round(n * test_frac))
-    n_val = int(round(n * val_frac))
-    test_ids = set(study_ids[:n_test])
-    val_ids = set(study_ids[n_test : n_test + n_val])
+    train_samples = []
+    val_samples = []
+    test_samples = []
+    for sample in samples:
+        study_id = sample["study_id"]
+        if study_id in test_ids:
+            test_samples.append(sample)
+        elif study_id in val_ids:
+            val_samples.append(sample)
+        else:
+            train_samples.append(sample)
 
-    def subset(pred):
-        return [s for s in samples if pred(s["study_id"])]
+    settings = {
+        "image_size": config.get("image_size", 224),
+        "box_size": config.get("box_size", 32),
+        "use_25d": config.get("use_25d", True),
+        "task": config.get("task", "stenosis"),
+        "box_source": config.get("box_source", "oracle"),
+        "detected_centers": config.get("detected_centers"),
+    }
 
-    train_s = subset(lambda i: i not in test_ids and i not in val_ids)
-    val_s = subset(lambda i: i in val_ids)
-    test_s = subset(lambda i: i in test_ids)
-
-    common = dict(
-        image_size=config.get("image_size", 224),
-        box_size=config.get("box_size", 32),
-        use_25d=config.get("use_25d", True),
-        task=config.get("task", "stenosis"),
-        box_source=config.get("box_source", "oracle"),
-        detected_centers=config.get("detected_centers"),
-    )
-    train_ds = RSNADataset(data_dir, samples=train_s, augment=True, **common)
-    val_ds = RSNADataset(data_dir, samples=val_s, augment=False, **common)
-    test_ds = RSNADataset(data_dir, samples=test_s, augment=False, **common)
+    train_ds = RSNADataset(data_dir, samples=train_samples, augment=True, **settings)
+    val_ds = RSNADataset(data_dir, samples=val_samples, augment=False, **settings)
+    test_ds = RSNADataset(data_dir, samples=test_samples, augment=False, **settings)
     return train_ds, val_ds, test_ds

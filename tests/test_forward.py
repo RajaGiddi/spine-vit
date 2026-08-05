@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 import sys
 
@@ -15,21 +13,21 @@ NUM_CLASSES = 3
 
 
 def make_synthetic_batch(batch_size=3, image_size=IMAGE_SIZE, seed=0):
-    rng = np.random.RandomState(seed)
+    random_state = np.random.RandomState(seed)
     images = torch.randn(batch_size, 3, image_size, image_size)
 
     boxes, level_indices, level_types, targets, num_levels = [], [], [], [], []
     for bi in range(batch_size):
-        k_disc = rng.randint(3, 6)
+        k_disc = random_state.randint(3, 6)
         types = [1] * k_disc + [0]
         k = len(types)
         for j in range(k):
-            cx, cy = rng.uniform(40, image_size - 40, size=2)
+            center_x, center_y = random_state.uniform(40, image_size - 40, size=2)
             half = 20
-            boxes.append([float(bi), cx - half, cy - half, cx + half, cy + half])
+            boxes.append([float(bi), center_x - half, center_y - half, center_x + half, center_y + half])
         level_indices.extend(range(k))
         level_types.extend(types)
-        targets.extend(list(rng.randint(0, NUM_CLASSES, size=k_disc)) + [-1])
+        targets.extend(list(random_state.randint(0, NUM_CLASSES, size=k_disc)) + [-1])
         num_levels.append(k)
 
     return {
@@ -83,14 +81,14 @@ def main():
             logits = out["logits"]
             n_params = model.count_trainable_params()
 
-            ok = logits.shape == (n_disc, NUM_CLASSES)
-            status = "OK " if ok else "FAIL"
+            passed = logits.shape == (n_disc, NUM_CLASSES)
+            status = "OK " if passed else "FAIL"
             print(
                 f"[{status}] tokenizer={tok:8s} pos={pe:8s} | "
                 f"logits {tuple(logits.shape)} encoded {tuple(out['encoded_tokens'].shape)} "
                 f"| trainable {n_params/1e6:.3f}M"
             )
-            if not ok:
+            if not passed:
                 failures += 1
 
             with torch.no_grad():

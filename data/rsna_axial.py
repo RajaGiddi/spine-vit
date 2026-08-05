@@ -1,90 +1,164 @@
-from __future__ import annotations
-
 import os
-from typing import Dict, List
 
 import numpy as np
 import pandas as pd
 
 from .rsna_dataset import LEVELS, LEVEL_TO_IDX, load_dicom_slice
 
-LEFT, RIGHT = "Left Subarticular Stenosis", "Right Subarticular Stenosis"
+LEFT = "Left Subarticular Stenosis"
+RIGHT = "Right Subarticular Stenosis"
 
 
-def build_axial_index(data_dir: str, posterior_offset: float = 0.0) -> Dict[int, Dict[int, Dict]]:
+def axial_dicom_path(data_dir, study_id, series, instance):
+    return os.path.join(data_dir, "train_images", str(study_id), str(series),
+                        str(instance) + ".dcm")
+
+
+def build_axial_index(data_dir, posterior_offset=0.0):
     coords = pd.read_csv(os.path.join(data_dir, "train_label_coordinates.csv"))
-    sub = coords[coords.condition.isin([LEFT, RIGHT])]
+    subarticular = coords[coords.condition.isin([LEFT, RIGHT])]
 
-    axial: Dict[int, Dict[int, Dict]] = {}
-    for sid, g in sub.groupby("study_id"):
-        per_level: Dict[int, Dict] = {}
-        for lv in LEVELS:
-            rows = g[g.level == lv]
-            if len(rows) == 0:
+    axial = {}
+    for study_id, study_rows in subarticular.groupby("study_id"):
+        per_level = {}
+
+        for level_name in LEVELS:
+            level_rows = study_rows[study_rows.level == level_name]
+            if len(level_rows) == 0:
                 continue
-            pts = []
-            for cond in (LEFT, RIGHT):
-                r = rows[rows.condition == cond]
-                if len(r):
-                    r = r.iloc[0]
-                    pts.append((float(r.x), float(r.y), int(r.instance_number), int(r.series_id)))
-            if not pts:
+
+            points = []
+            for condition in [LEFT, RIGHT]:
+                matching = level_rows[level_rows.condition == condition]
+                if len(matching):
+                    row = matching.iloc[0]
+                    points.append({
+                        "x": float(row.x),
+                        "y": float(row.y),
+                        "instance": int(row.instance_number),
+                        "series": int(row.series_id),
+                    })
+
+            if not points:
                 continue
-            cx = float(np.mean([p[0] for p in pts]))
-            cy = float(np.mean([p[1] for p in pts])) + posterior_offset
-            per_level[LEVEL_TO_IDX[lv]] = {
-                "series": pts[0][3], "instance": pts[0][2], "cx": cx, "cy": cy,
-                "sided": len(pts), "inst_lr": [p[2] for p in pts], "series_lr": [p[3] for p in pts],
+
+            xs = []
+            ys = []
+            instances = []
+            series_ids = []
+            for point in points:
+                xs.append(point["x"])
+                ys.append(point["y"])
+                instances.append(point["instance"])
+                series_ids.append(point["series"])
+
+            per_level[LEVEL_TO_IDX[level_name]] = {
+                "series": points[0]["series"],
+                "instance": points[0]["instance"],
+                "cx": float(np.mean(xs)),
+                "cy": float(np.mean(ys)) + posterior_offset,
+                "sided": len(points),
+                "inst_lr": instances,
+                "series_lr": series_ids,
             }
+
         if per_level:
-            axial[int(sid)] = per_level
+            axial[int(study_id)] = per_level
+
     return axial
 
 
-def axial_coverage(axial: Dict[int, Dict[int, Dict]], all_study_ids: List[int]) -> Dict:
-    """Coverage vs the sagittal cohort: fraction with any / all-5 axial levels."""
-    have_any = sum(1 for s in all_study_ids if axial.get(s))
-    have_all5 = sum(1 for s in all_study_ids if len(axial.get(s, {})) == 5)
-    per_level = {LEVELS[L]: sum(1 for s in all_study_ids if L in axial.get(s, {})) for L in range(5)}
-    n = len(all_study_ids)
+def axial_coverage(axial, all_study_ids):
+    has_any = 0
+    has_all_five = 0
+    for study_id in all_study_ids:
+        levels = axial.get(study_id, {})
+        if levels:
+            has_any = has_any + 1
+        if len(levels) == 5:
+            has_all_five = has_all_five + 1
+
+    per_level = {}
+    for level in range(5):
+        count = 0
+        for study_id in all_study_ids:
+            if level in axial.get(study_id, {}):
+                count = count + 1
+        per_level[LEVELS[level]] = count
+
+    total = len(all_study_ids)
     return {
-        "n_studies": n,
-        "has_any_axial": have_any, "pct_any": 100 * have_any / max(1, n),
-        "has_all5_axial": have_all5, "pct_all5": 100 * have_all5 / max(1, n),
+        "n_studies": total,
+        "has_any_axial": has_any,
+        "pct_any": 100 * has_any / max(1, total),
+        "has_all5_axial": has_all_five,
+        "pct_all5": 100 * has_all_five / max(1, total),
         "per_level_count": per_level,
     }
 
 
-def axial_monotonicity_flags(axial: Dict[int, Dict[int, Dict]]) -> List[int]:
-    bad = []
-    for sid, levels in axial.items():
-        by_series: Dict[int, List] = {}
-        for L, info in levels.items():
-            by_series.setdefault(info["series"], []).append((L, info["instance"]))
-        for series, items in by_series.items():
+def is_sorted(values):
+    increasing = True
+    decreasing = True
+    for i in range(len(values) - 1):
+        if values[i] > values[i + 1]:
+            increasing = False
+        if values[i] < values[i + 1]:
+            decreasing = False
+    return increasing or decreasing
+
+
+def axial_monotonicity_flags(axial):
+    flagged = []
+
+    for study_id in axial:
+        levels = axial[study_id]
+
+        by_series = {}
+        for level in levels:
+            series = levels[level]["series"]
+            if series not in by_series:
+                by_series[series] = []
+            by_series[series].append((level, levels[level]["instance"]))
+
+        for series in by_series:
+            items = by_series[series]
             if len(items) < 2:
                 continue
             items.sort()
-            insts = [it[1] for it in items]
-            if not (all(a <= b for a, b in zip(insts, insts[1:])) or
-                    all(a >= b for a, b in zip(insts, insts[1:]))):
-                bad.append(sid)
+
+            instances = []
+            for level, instance in items:
+                instances.append(instance)
+
+            if not is_sorted(instances):
+                flagged.append(study_id)
                 break
-    return bad
+
+    return flagged
 
 
-def load_axial_slice(data_dir: str, sid: int, series: int, instance: int) -> np.ndarray:
-    return load_dicom_slice(os.path.join(data_dir, "train_images", str(sid), str(series), f"{instance}.dcm"))
+def load_axial_slice(data_dir, study_id, series, instance):
+    return load_dicom_slice(axial_dicom_path(data_dir, study_id, series, instance))
 
 
-def axial_box_mm(data_dir: str, sid: int, series: int, instance: int, box_px_224: int, image_size: int = 224):
+def axial_box_mm(data_dir, study_id, series, instance, box_px, image_size=224):
     import pydicom
 
-    ds = pydicom.dcmread(os.path.join(data_dir, "train_images", str(sid), str(series), f"{instance}.dcm"),
-                         stop_before_pixels=True)
-    oh, ow = int(ds.Rows), int(ds.Columns)
-    ps = getattr(ds, "PixelSpacing", None)
-    row_sp, col_sp = (float(ps[0]), float(ps[1])) if ps is not None else (1.0, 1.0)
-    mm_x = box_px_224 * (ow / image_size) * col_sp
-    mm_y = box_px_224 * (oh / image_size) * row_sp
+    path = axial_dicom_path(data_dir, study_id, series, instance)
+    dicom = pydicom.dcmread(path, stop_before_pixels=True)
+
+    original_height = int(dicom.Rows)
+    original_width = int(dicom.Columns)
+
+    spacing = getattr(dicom, "PixelSpacing", None)
+    if spacing is not None:
+        row_spacing = float(spacing[0])
+        col_spacing = float(spacing[1])
+    else:
+        row_spacing = 1.0
+        col_spacing = 1.0
+
+    mm_x = box_px * (original_width / image_size) * col_spacing
+    mm_y = box_px * (original_height / image_size) * row_spacing
     return mm_x, mm_y

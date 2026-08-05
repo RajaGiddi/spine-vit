@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-from __future__ import annotations
-
 import argparse
 import json
 import os
@@ -37,10 +34,11 @@ def save(fig, stem):
     plt.close(fig)
 
 
-def bare(ax, img):
+def plain_axes(ax, img):
     lo, hi = np.percentile(img, [2, 98])
     ax.imshow(img, cmap="gray", vmin=lo, vmax=hi)
-    ax.set_xlim(0, img.shape[1]); ax.set_ylim(img.shape[0], 0)
+    ax.set_xlim(0, img.shape[1])
+    ax.set_ylim(img.shape[0], 0)
     ax.axis("off")
 
 
@@ -58,7 +56,7 @@ class Data:
         idx = build_rsna_index(data_dir, "stenosis")
         self.ds = RSNADataset(data_dir, samples=idx, augment=False, box_size=32,
                               image_size=224, use_25d=True, box_source="oracle")
-        self.pos = {s["study_id"]: i for i, s in enumerate(self.ds.samples)}
+        self.pos = {sample["study_id"]: i for i, sample in enumerate(self.ds.samples)}
 
     def slice_boxes(self, study):
         i = self.pos[study]
@@ -67,45 +65,44 @@ class Data:
         return img, item["boxes"].numpy(), item["level_indices"].numpy(), item["targets"].numpy(), self.ds.samples[i]
 
     def dims(self, samp):
-        p = os.path.join(self.data_dir, "train_images", str(samp["study_id"]),
+        path = os.path.join(self.data_dir, "train_images", str(samp["study_id"]),
                          str(samp["series_id"]), f"{samp['instance_number']}.dcm")
-        d = pydicom.dcmread(p, stop_before_pixels=True)
-        ps = getattr(d, "PixelSpacing", None)
+        dicom = pydicom.dcmread(path, stop_before_pixels=True)
+        ps = getattr(dicom, "PixelSpacing", None)
         rs, cs = (float(ps[0]), float(ps[1])) if ps is not None else (1.0, 1.0)
-        return int(d.Rows), int(d.Columns), rs, cs
+        return int(dicom.Rows), int(dicom.Columns), rs, cs
 
 
 def figure1(data, log, study=None):
     if study is None:
         spread = []
-        for s in data.ds.samples:
-            if len(s["levels"]) == 5:
-                xs = [lv["x"] for lv in s["levels"]]
-                spread.append((max(xs) - min(xs), s["study_id"]))
+        for sample in data.ds.samples:
+            if len(sample["levels"]) == 5:
+                x_values = [level["x"] for level in sample["levels"]]
+                spread.append((max(x_values) - min(x_values), sample["study_id"]))
         spread.sort()
         study = spread[int(0.65 * len(spread))][1]
     img, boxes, lvls, _, _ = data.slice_boxes(study)
-    W = img.shape[1]
-
-    H = img.shape[0]
+    width = img.shape[1]
+    height = img.shape[0]
     fig, ax = plt.subplots(1, 3, figsize=(FIGW, 1.35))
-    bare(ax[0], img)
-    for b, li in zip(boxes, lvls):
-        x1, y1, x2, y2 = b
+    plain_axes(ax[0], img)
+    for box, li in zip(boxes, lvls):
+        x1, y1, x2, y2 = box
         ax[0].add_patch(patches.Rectangle((x1, y1), x2 - x1, y2 - y1, lw=0.8, ec=ACCENT, fc="none"))
-        label(ax[0], W - 2, (y1 + y2) / 2, LEVELS[li], ACCENT, alpha=0.5)
+        label(ax[0], width - 2, (y1 + y2) / 2, LEVELS[li], ACCENT, alpha=0.5)
     ax[0].set_title("(a) Anatomy-aware", fontsize=7)
 
-    bare(ax[1], img)
-    bh = H / 5
+    plain_axes(ax[1], img)
+    band_height = height / 5
     for k in range(6):
-        y = min(max(k * bh, 0.7), H - 0.7)
-        ax[1].plot([0, W], [y, y], color=ACCENT, lw=0.7, ls=(0, (3, 2)))
+        y = min(max(k * band_height, 0.7), height - 0.7)
+        ax[1].plot([0, width], [y, y], color=ACCENT, lw=0.7, ls=(0, (3, 2)))
     for k in range(5):
-        label(ax[1], W - 2, (k + 0.5) * bh, LEVELS[k], ACCENT, alpha=0.5)
+        label(ax[1], width - 2, (k + 0.5) * band_height, LEVELS[k], ACCENT, alpha=0.5)
     ax[1].set_title("(b) Uniform strips", fontsize=7)
 
-    bare(ax[2], img)
+    plain_axes(ax[2], img)
     for k in range(0, 225, 14):
         ax[2].axhline(k, color="0.7", lw=0.3, alpha=0.5)
         ax[2].axvline(k, color="0.7", lw=0.3, alpha=0.5)
@@ -116,100 +113,112 @@ def figure1(data, log, study=None):
     log.append(f"Figure 1 study: {study}")
 
 
-def _by_study(pred_path):
+def load_predictions_by_study(pred_path):
     tp = json.load(open(pred_path))
     out = {}
-    for sid, lv, pr, tg in zip(tp["studyids"], tp["levels"], tp["preds"], tp["targets"]):
-        out.setdefault(sid, {})[lv] = (pr, tg)
+    for sid, level, pr, tg in zip(tp["studyids"], tp["levels"], tp["preds"], tp["targets"]):
+        out.setdefault(sid, {})[level] = (pr, tg)
     return out, list(dict.fromkeys(tp["studyids"]))
 
 
-def _grade_box(ax, cx, cy, color, half=16, lw=0.9):
+def grade_box(ax, cx, cy, color, half=16, lw=0.9):
     ax.add_patch(patches.Rectangle((cx - half, cy - half), 2 * half, 2 * half, lw=lw, ec=color, fc="none"))
 
 
 def figure2(data, log, pred_path, det_path):
-    byid, order = _by_study(pred_path)
+    byid, order = load_predictions_by_study(pred_path)
     det = json.load(open(det_path))
 
-    def argworst(d, key):
-        return max(sorted(d), key=lambda l: d[l][key])
+    def argworst(per_level, key):
+        def grade_at_level(level):
+            return per_level[level][key]
 
-    succ = next((s for s in order if s in data.pos and len(byid[s]) == 5
-                 and all(p == t for p, t in byid[s].values()) and max(t for _, t in byid[s].values()) >= 1), None)
-    mis = next((s for s in order if s in data.pos and max(t for _, t in byid[s].values()) >= 1
-                and max(p for p, _ in byid[s].values()) >= 1
-                and any(p >= 1 and t >= 1 for p, t in byid[s].values())
-                and argworst(byid[s], 0) != argworst(byid[s], 1)), None)
+        return max(sorted(per_level), key=grade_at_level)
+
+    succ = next((sample for sample in order if sample in data.pos and len(byid[sample]) == 5
+                 and all(pred_grade == true_grade for pred_grade, true_grade in byid[sample].values())
+                 and max(true_grade for _, true_grade in byid[sample].values()) >= 1), None)
+    mis = next((sample for sample in order if sample in data.pos
+                and max(true_grade for _, true_grade in byid[sample].values()) >= 1
+                and max(pred_grade for pred_grade, _ in byid[sample].values()) >= 1
+                and any(pred_grade >= 1 and true_grade >= 1 for pred_grade, true_grade in byid[sample].values())
+                and argworst(byid[sample], 0) != argworst(byid[sample], 1)), None)
 
     worst_l12 = None
-    for s in order:
-        if s not in data.pos or str(s) not in det:
+    for sample in order:
+        if sample not in data.pos or str(sample) not in det:
             continue
-        samp_i = data.pos[s]
-        gt = {lv["level_idx"]: (lv["x"], lv["y"]) for lv in data.ds.samples[samp_i]["levels"]}
-        if 0 not in gt or "0" not in det[str(s)]:
+        samp_i = data.pos[sample]
+        gt = {level["level_idx"]: (level["x"], level["y"]) for level in data.ds.samples[samp_i]["levels"]}
+        if 0 not in gt or "0" not in det[str(sample)]:
             continue
         _, _, rs, cs = data.dims(data.ds.samples[samp_i])
-        dx = (det[str(s)]["0"][0] - gt[0][0]) * cs
-        dy = (det[str(s)]["0"][1] - gt[0][1]) * rs
+        dx = (det[str(sample)]["0"][0] - gt[0][0]) * cs
+        dy = (det[str(sample)]["0"][1] - gt[0][1]) * rs
         mm = float(np.hypot(dx, dy))
         if worst_l12 is None or mm > worst_l12[1]:
-            worst_l12 = (s, mm)
+            worst_l12 = (sample, mm)
 
     fig, ax = plt.subplots(1, 3, figsize=(FIGW, 1.5))
 
     img, boxes, lvls, tgts, _ = data.slice_boxes(succ)
-    W = img.shape[1]; bare(ax[0], img)
-    wl = argworst(byid[succ], 1)
-    for b, li in zip(boxes, lvls):
-        x1, y1, x2, y2 = b
-        p, t = byid[succ][li]
-        _grade_box(ax[0], (x1 + x2) / 2, (y1 + y2) / 2, RIGHT)
-        txt = f"{LEVELS[li]}: {GRADES[p]}" + ("" if p == t else f" ({GRADES[t]})")
-        label(ax[0], W - 2, (y1 + y2) / 2, txt, RIGHT)
+    width = img.shape[1]
+    plain_axes(ax[0], img)
+    for box, li in zip(boxes, lvls):
+        x1, y1, x2, y2 = box
+        pred_grade, true_grade = byid[succ][li]
+        grade_box(ax[0], (x1 + x2) / 2, (y1 + y2) / 2, RIGHT)
+        txt = f"{LEVELS[li]}: {GRADES[pred_grade]}"
+        if pred_grade != true_grade:
+            txt = txt + f" ({GRADES[true_grade]})"
+        label(ax[0], width - 2, (y1 + y2) / 2, txt, RIGHT)
     ax[0].set_title("(a) Correct", fontsize=7)
 
     img, boxes, lvls, tgts, _ = data.slice_boxes(mis)
-    W = img.shape[1]; bare(ax[1], img)
+    width = img.shape[1]
+    plain_axes(ax[1], img)
     true_w, pred_w = argworst(byid[mis], 1), argworst(byid[mis], 0)
-    for b, li in zip(boxes, lvls):
-        x1, y1, x2, y2 = b
-        p, t = byid[mis][li]
+    for box, li in zip(boxes, lvls):
+        x1, y1, x2, y2 = box
+        pred_grade, true_grade = byid[mis][li]
         worst = li in (true_w, pred_w)
         box_c = RIGHT if li == true_w else (WRONG if li == pred_w else "0.6")
         txt_c = RIGHT if li == true_w else (WRONG if li == pred_w else NEUTRAL)
-        _grade_box(ax[1], (x1 + x2) / 2, (y1 + y2) / 2, box_c, lw=1.2 if worst else 0.7)
-        txt = f"{LEVELS[li]}: {GRADES[p]}" + ("" if p == t else f" ({GRADES[t]})")
-        label(ax[1], W - 2, (y1 + y2) / 2, txt, txt_c)
+        grade_box(ax[1], (x1 + x2) / 2, (y1 + y2) / 2, box_c, lw=1.2 if worst else 0.7)
+        txt = f"{LEVELS[li]}: {GRADES[pred_grade]}"
+        if pred_grade != true_grade:
+            txt = txt + f" ({GRADES[true_grade]})"
+        label(ax[1], width - 2, (y1 + y2) / 2, txt, txt_c)
     ax[1].set_title("(b) Under Grading", fontsize=7)
 
-    s, mm = worst_l12
-    img, _, _, _, samp = data.slice_boxes(s)
-    W = img.shape[1]; h0, w0, _, _ = data.dims(samp); sx, sy = 224 / w0, 224 / h0
-    bare(ax[2], img)
-    gt = {lv["level_idx"]: (lv["x"], lv["y"]) for lv in samp["levels"]}
+    sample, mm = worst_l12
+    img, _, _, _, samp = data.slice_boxes(sample)
+    width = img.shape[1]
+    h0, w0, _, _ = data.dims(samp)
+    sx, sy = 224 / w0, 224 / h0
+    plain_axes(ax[2], img)
+    gt = {level["level_idx"]: (level["x"], level["y"]) for level in samp["levels"]}
     gx, gy = gt[0][0] * sx, gt[0][1] * sy
-    dx, dy = det[str(s)]["0"][0] * sx, det[str(s)]["0"][1] * sy
+    dx, dy = det[str(sample)]["0"][0] * sx, det[str(sample)]["0"][1] * sy
     ax[2].plot([gx, dx], [gy, dy], color=WRONG, lw=0.8)
-    ax[2].scatter([gx], [gy], s=10, c=GT, marker="o", zorder=3, edgecolors="none")
-    ax[2].scatter([dx], [dy], s=10, c=ACCENT, marker="x", zorder=3, linewidths=0.9)
-    label(ax[2], min(W - 2, max(gx, dx) + 4), (gy + dy) / 2, f"{mm:.0f} mm", WRONG, ha="left")
+    ax[2].scatter([gx], [gy], sample=10, c=GT, marker="o", zorder=3, edgecolors="none")
+    ax[2].scatter([dx], [dy], sample=10, c=ACCENT, marker="x", zorder=3, linewidths=0.9)
+    label(ax[2], min(width - 2, max(gx, dx) + 4), (gy + dy) / 2, f"{mm:.0f} mm", WRONG, ha="left")
     ax[2].set_title("(c) Detector failure", fontsize=7)
 
     fig.tight_layout(pad=0.2, w_pad=0.4)
     save(fig, "qualitative")
     log += [f"Figure 2a (correct): {succ}", f"Figure 2b (misattribution): {mis}",
-            f"Figure 2c (detector fail L1/L2): {s}  ({mm:.1f} mm)"]
+            f"Figure 2c (detector fail L1/L2): {sample}  ({mm:.1f} mm)"]
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data_dir", default="data/rsna")
-    ap.add_argument("--pred", default="outputs_modal/rsna_anatomy_ordinal_256_2_b48_s42/test_predictions.json")
-    ap.add_argument("--detector", default="outputs/detector/detected_centers.json")
-    ap.add_argument("--fig1_study", type=int, default=None)
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", default="data/rsna")
+    parser.add_argument("--pred", default="outputs_modal/rsna_anatomy_ordinal_256_2_b48_s42/test_predictions.json")
+    parser.add_argument("--detector", default="outputs/detector/detected_centers.json")
+    parser.add_argument("--fig1_study", type=int, default=None)
+    args = parser.parse_args()
 
     os.makedirs("figures", exist_ok=True)
     data = Data(args.data_dir)

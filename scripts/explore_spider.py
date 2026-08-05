@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import os
 import sys
@@ -27,11 +25,11 @@ def overlay_sample(sample, idx, out_dir):
 
     fig, ax = plt.subplots(figsize=(5, 8))
     ax.imshow(disp, cmap="gray")
-    for b, t, tg in zip(boxes, types, targets):
-        x1, y1, x2, y2 = b
-        color = "cyan" if t == 1 else "orange"
+    for box, token_type, tg in zip(boxes, types, targets):
+        x1, y1, x2, y2 = box
+        color = "cyan" if token_type == 1 else "orange"
         ax.add_patch(patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1.5, edgecolor=color, facecolor="none"))
-        if t == 1 and 0 <= tg < len(PFIRRMANN_NAMES):
+        if token_type == 1 and 0 <= tg < len(PFIRRMANN_NAMES):
             ax.text(x1, y1 - 2, PFIRRMANN_NAMES[tg], color="yellow", fontsize=8)
     ax.set_title(f"SPIDER patient {sample['study_id']}  (cyan=disc, orange=vertebra)")
     ax.axis("off")
@@ -43,31 +41,31 @@ def overlay_sample(sample, idx, out_dir):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data_dir", type=str, required=True)
-    ap.add_argument("--n", type=int, default=5)
-    ap.add_argument("--out_dir", type=str, default="outputs/eda")
-    ap.add_argument("--no_oracle", action="store_true", help="use the intensity heuristic instead of masks")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--n", type=int, default=5)
+    parser.add_argument("--out_dir", type=str, default="outputs/eda")
+    parser.add_argument("--no_oracle", action="store_true", help="use the intensity heuristic instead of masks")
+    args = parser.parse_args()
 
-    ds = SPIDERDataset(args.data_dir, augment=False, use_oracle_regions=not args.no_oracle)
-    print(f"Total SPIDER samples: {len(ds)}  (oracle_regions={not args.no_oracle})")
+    dataset = SPIDERDataset(args.data_dir, augment=False, use_oracle_regions=not args.no_oracle)
+    print(f"Total SPIDER samples: {len(dataset)}  (oracle_regions={not args.no_oracle})")
 
-    for i in range(min(args.n, len(ds))):
-        s = ds[i]
-        n_disc = int((s["level_types"] == 1).sum())
-        n_vert = int((s["level_types"] == 0).sum())
+    for i in range(min(args.n, len(dataset))):
+        sample = dataset[i]
+        n_disc = int((sample["level_types"] == 1).sum())
+        n_vert = int((sample["level_types"] == 0).sum())
         print(
-            f"\n[sample {i}] patient {s['study_id']}  image {tuple(s['image'].shape)}  "
-            f"tokens {s['num_levels']} (discs {n_disc}, vertebrae {n_vert})"
+            f"\n[sample {i}] patient {sample['study_id']}  image {tuple(sample['image'].shape)}  "
+            f"tokens {sample['num_levels']} (discs {n_disc}, vertebrae {n_vert})"
         )
-        print(f"  level_indices {s['level_indices'].tolist()}")
-        print(f"  level_types   {s['level_types'].tolist()}")
-        print(f"  targets       {s['targets'].tolist()}")
-        p = overlay_sample(s, i, args.out_dir)
+        print(f"  level_indices {sample['level_indices'].tolist()}")
+        print(f"  level_types   {sample['level_types'].tolist()}")
+        print(f"  targets       {sample['targets'].tolist()}")
+        p = overlay_sample(sample, i, args.out_dir)
         print(f"  overlay -> {p}")
 
-    targets = ds.get_all_targets()
+    targets = dataset.get_all_targets()
     valid = targets[targets != -1]
     print("\nPfirrmann grade distribution:")
     for c, name in enumerate(PFIRRMANN_NAMES):

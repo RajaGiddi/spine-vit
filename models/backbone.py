@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 import torch
 import torch.nn as nn
 
 
 class DINOv2Backbone(nn.Module):
-    def __init__(self, model_name: str = "dinov2_vits14", freeze: bool = True):
+    def __init__(self, model_name="dinov2_vits14", freeze=True):
         super().__init__()
         self.model_name = model_name
         self.freeze = freeze
@@ -15,35 +13,32 @@ class DINOv2Backbone(nn.Module):
         self.spatial_scale = 1.0 / self.patch_size
 
         if freeze:
-            for p in self.model.parameters():
-                p.requires_grad = False
+            for parameter in self.model.parameters():
+                parameter.requires_grad = False
             self.model.eval()
 
-    def train(self, mode: bool = True):
-        """Keep a frozen backbone in eval mode regardless of the parent's mode."""
+    def train(self, mode=True):
         super().train(mode)
         if self.freeze:
             self.model.eval()
         return self
 
-    def _extract(self, x: torch.Tensor) -> torch.Tensor:
-        b, _, h, w = x.shape
-        hp, wp = h // self.patch_size, w // self.patch_size
+    def extract(self, x):
+        batch_size = x.shape[0]
+        height = x.shape[2] // self.patch_size
+        width = x.shape[3] // self.patch_size
         tokens = self.model.get_intermediate_layers(x, n=1)[0]
-        feat = tokens.transpose(1, 2).reshape(b, self.embed_dim, hp, wp)
-        return feat
+        return tokens.transpose(1, 2).reshape(batch_size, self.embed_dim, height, width)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x):
         if self.freeze:
             with torch.no_grad():
-                return self._extract(x)
-        return self._extract(x)
+                return self.extract(x)
+        return self.extract(x)
 
 
 class MockBackbone(nn.Module):
-    """Offline stand-in with the DINOv2 output contract (no downloads)."""
-
-    def __init__(self, embed_dim: int = 384, patch_size: int = 14, freeze: bool = True):
+    def __init__(self, embed_dim=384, patch_size=14, freeze=True):
         super().__init__()
         self.embed_dim = embed_dim
         self.patch_size = patch_size
@@ -55,34 +50,35 @@ class MockBackbone(nn.Module):
             nn.Conv2d(64, embed_dim, 3, stride=2, padding=1),
             nn.GELU(),
         )
+
         if freeze:
-            for p in self.parameters():
-                p.requires_grad = False
+            for parameter in self.parameters():
+                parameter.requires_grad = False
             self.stem.eval()
 
-    def train(self, mode: bool = True):
+    def train(self, mode=True):
         super().train(mode)
         if self.freeze:
             self.stem.eval()
         return self
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, _, h, w = x.shape
-        hp, wp = h // self.patch_size, w // self.patch_size
+    def forward(self, x):
+        height = x.shape[2] // self.patch_size
+        width = x.shape[3] // self.patch_size
         feat = self.stem(x)
-        feat = nn.functional.adaptive_avg_pool2d(feat, (hp, wp))
+        feat = nn.functional.adaptive_avg_pool2d(feat, (height, width))
         if self.freeze:
             feat = feat.detach()
         return feat
 
 
-def build_backbone(config: dict) -> nn.Module:
+def build_backbone(config):
     name = config.get("backbone", "dinov2_vits14")
     freeze = config.get("freeze_backbone", True)
+
     if name == "mock":
-        return MockBackbone(
-            embed_dim=config.get("backbone_dim", 384),
-            patch_size=config.get("patch_size", 14),
-            freeze=freeze,
-        )
+        return MockBackbone(embed_dim=config.get("backbone_dim", 384),
+                            patch_size=config.get("patch_size", 14),
+                            freeze=freeze)
+
     return DINOv2Backbone(model_name=name, freeze=freeze)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import os
 import sys
@@ -16,7 +14,7 @@ LEVELS = ["L1/L2", "L2/L3", "L3/L4", "L4/L5", "L5/S1"]
 GRADE_MAP = {"Normal/Mild": 0, "Moderate": 1, "Severe": 2}
 
 
-def load_dotenv(path: str = ".env") -> None:
+def load_dotenv(path=".env"):
     p = Path(path)
     if not p.exists():
         return
@@ -28,7 +26,7 @@ def load_dotenv(path: str = ".env") -> None:
         os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
 
 
-def check_credentials() -> None:
+def check_credentials():
     try:
         from kagglehub.config import get_kaggle_credentials
 
@@ -46,7 +44,7 @@ def check_credentials() -> None:
     )
 
 
-def _explain_http_error(err: Exception) -> None:
+def explain_http_error(err):
     resp = getattr(err, "response", None)
     status = getattr(resp, "status_code", None)
     text = str(err).lower()
@@ -70,7 +68,7 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 OK, MISSING, RATE_LIMITED = "ok", "missing", "rate_limited"
 
 
-def download_file(rel_path: str, out_dir: Path, force: bool = False, max_retries: int = 5) -> str:
+def download_file(rel_path, out_dir, force=False, max_retries=5):
     target = out_dir / rel_path
     if target.exists() and not force:
         return OK
@@ -92,12 +90,11 @@ def download_file(rel_path: str, out_dir: Path, force: bool = False, max_retries
                 return RATE_LIMITED
             if status == 404 or isinstance(err, NotFoundError):
                 return MISSING
-            _explain_http_error(err)
+            explain_http_error(err)
             return MISSING
 
 
-def download_csvs(out_dir: Path) -> None:
-    """Download the three annotation CSVs. A few MB total."""
+def download_csvs(out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Downloading annotation CSVs to {out_dir}/")
 
@@ -110,7 +107,7 @@ def download_csvs(out_dir: Path) -> None:
         status = download_file(fname, out_dir)
         print("ok" if status == OK else f"FAILED ({status})")
 
-    missing = [f for f in CSV_FILES if not (out_dir / f).exists()]
+    missing = [name for name in CSV_FILES if not (out_dir / name).exists()]
     if missing:
         sys.exit(f"ERROR: failed to download {missing}. Check credentials and rules acceptance.")
 
@@ -121,7 +118,7 @@ def download_csvs(out_dir: Path) -> None:
     print(f"  Conditions: {sorted(coords.condition.unique())}")
 
 
-def select_studies(csv_dir: Path, n: int, seed: int = 42) -> list[int]:
+def select_studies(csv_dir, count, seed=42):
     labels = pd.read_csv(csv_dir / "train.csv")
     coords = pd.read_csv(csv_dir / "train_label_coordinates.csv")
     series = pd.read_csv(csv_dir / "train_series_descriptions.csv")
@@ -136,7 +133,7 @@ def select_studies(csv_dir: Path, n: int, seed: int = 42) -> list[int]:
     grade_cols = [
         f"spinal_canal_stenosis_{lv.lower().replace('/', '_')}" for lv in LEVELS
     ]
-    grade_cols = [c for c in grade_cols if c in labels.columns]
+    grade_cols = [column for column in grade_cols if column in labels.columns]
     complete = set(labels[labels[grade_cols].notna().all(axis=1)].study_id)
 
     usable = sorted(sag_t2 & all_levels & complete)
@@ -148,16 +145,21 @@ def select_studies(csv_dir: Path, n: int, seed: int = 42) -> list[int]:
     if not usable:
         sys.exit("ERROR: no usable studies found. Check the CSV files.")
 
-    if n >= len(usable):
+    if count >= len(usable):
         selected = usable
     else:
-        df = labels[labels.study_id.isin(usable)].copy()
-        df["worst"] = df[grade_cols].apply(
-            lambda row: max(GRADE_MAP.get(v, 0) for v in row if pd.notna(v)), axis=1
-        )
+        table = labels[labels.study_id.isin(usable)].copy()
+        def worst_grade_in_row(row):
+            grades = []
+            for value in row:
+                if pd.notna(value):
+                    grades.append(GRADE_MAP.get(value, 0))
+            return max(grades)
+
+        table["worst"] = table[grade_cols].apply(worst_grade_in_row, axis=1)
         from sklearn.model_selection import train_test_split
         selected, _ = train_test_split(
-            df.study_id.tolist(), train_size=n, stratify=df.worst, random_state=seed
+            table.study_id.tolist(), train_size=count, stratify=table.worst, random_state=seed
         )
         selected = sorted(selected)
 
@@ -165,9 +167,8 @@ def select_studies(csv_dir: Path, n: int, seed: int = 42) -> list[int]:
     return selected
 
 
-def report_distribution(labels: pd.DataFrame, study_ids: list[int], grade_cols: list[str]) -> None:
-    """Print the severity distribution of the selected studies."""
-    df = labels[labels.study_id.isin(study_ids)]
+def report_distribution(labels, study_ids, grade_cols):
+    table = labels[labels.study_id.isin(study_ids)]
     print(f"\nSelected {len(study_ids)} studies")
 
     print("\n  Per-level severity counts:")
@@ -176,14 +177,14 @@ def report_distribution(labels: pd.DataFrame, study_ids: list[int], grade_cols: 
         header += f"{name:>14}"
     print(header)
 
-    totals = {k: 0 for k in GRADE_MAP}
+    totals = {key: 0 for key in GRADE_MAP}
     for col, lv in zip(grade_cols, LEVELS):
-        counts = df[col].value_counts()
+        counts = table[col].value_counts()
         row = f"    {lv:<8}"
         for name in GRADE_MAP:
-            c = int(counts.get(name, 0))
-            totals[name] += c
-            row += f"{c:>14}"
+            count = int(counts.get(name, 0))
+            totals[name] += count
+            row += f"{count:>14}"
         print(row)
 
     total = sum(totals.values())
@@ -200,10 +201,10 @@ def report_distribution(labels: pd.DataFrame, study_ids: list[int], grade_cols: 
 
 
 def download_file_level(
-    csv_dir: Path, out_dir: Path, n: int, context_slices: int = 1, tag: str = "subset",
-    delay: float = 0.25, rl_break: int = 6,
-) -> None:
-    study_ids = select_studies(csv_dir, n)
+    csv_dir, out_dir, count, context_slices = 1, tag = "subset",
+    delay = 0.25, rl_break = 6,
+) :
+    study_ids = select_studies(csv_dir, count)
     coords = pd.read_csv(csv_dir / "train_label_coordinates.csv")
     series = pd.read_csv(csv_dir / "train_series_descriptions.csv")
     canal = coords[coords.condition == "Spinal Canal Stenosis"]
@@ -211,24 +212,24 @@ def download_file_level(
     desc = series.series_description.fillna("").str.lower()
     sagt2_series = set(series[desc.str.contains("sagittal") & desc.str.contains("t2")].series_id)
 
-    wanted: set[tuple[int, int, int]] = set()
+    wanted = set()
     for sid in study_ids:
         rows = canal[(canal.study_id == sid) & (canal.series_id.isin(sagt2_series))]
-        for _, r in rows.iterrows():
+        for _, response in rows.iterrows():
             for offset in range(-context_slices, context_slices + 1):
-                wanted.add((int(sid), int(r.series_id), int(r.instance_number) + offset))
+                wanted.add((int(sid), int(response.series_id), int(response.instance_number) + offset))
 
     print(f"\nDownloading up to {len(wanted)} DICOM files for {len(study_ids)} studies")
     print("(some neighbor slices won't exist at series boundaries - that's expected)\n")
 
-    ok = missing = 0
+    downloaded = missing = 0
     consecutive_rl = 0
     stopped = False
     for i, (sid, series_id, inst) in enumerate(sorted(wanted), 1):
         rel = f"train_images/{sid}/{series_id}/{inst}.dcm"
         status = download_file(rel, out_dir)
         if status == OK:
-            ok += 1
+            downloaded += 1
             consecutive_rl = 0
         elif status == MISSING:
             missing += 1
@@ -236,17 +237,17 @@ def download_file_level(
         else:
             consecutive_rl += 1
             if consecutive_rl >= rl_break:
-                print(f"\n[stop] Hit sustained Kaggle rate-limiting after {ok} files this run.")
+                print(f"\n[stop] Hit sustained Kaggle rate-limiting after {downloaded} files this run.")
                 print("       Wait ~30-60 min for the quota to reset, then re-run the SAME")
                 print("       command to resume - files already on disk are skipped.")
                 stopped = True
                 break
         if i % 50 == 0:
-            print(f"  {i}/{len(wanted)} attempted - {ok} ok, {missing} missing")
+            print(f"  {i}/{len(wanted)} attempted - {downloaded} ok, {missing} missing")
         if delay:
             time.sleep(delay)
 
-    print(f"\nDone: {ok} files downloaded, {missing} genuinely unavailable (boundary slices).")
+    print(f"\nDone: {downloaded} files downloaded, {missing} genuinely unavailable (boundary slices).")
     if stopped:
         print("NOTE: run stopped early due to rate-limiting - re-run to fetch the rest.")
 
@@ -254,21 +255,20 @@ def download_file_level(
     write_id_list(out_dir, study_ids, tag)
 
 
-def download_full(out_dir: Path) -> Path:
-    """Download the entire competition directly to out_dir (bypasses the cache)."""
+def download_full(out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     print("Downloading the full competition (100+ GB) directly to", out_dir)
     print("This is resumable - re-run if interrupted.\n")
     try:
         path = kagglehub.competition_download(COMPETITION, output_dir=str(out_dir))
     except KaggleApiHTTPError as err:
-        _explain_http_error(err)
+        explain_http_error(err)
         raise
     print("Downloaded to", path)
     return Path(path)
 
 
-def write_subset_csvs(csv_dir: Path, out_dir: Path, study_ids: list[int]) -> None:
+def write_subset_csvs(csv_dir, out_dir, study_ids):
     out_dir.mkdir(parents=True, exist_ok=True)
     id_set = set(study_ids)
 
@@ -276,24 +276,22 @@ def write_subset_csvs(csv_dir: Path, out_dir: Path, study_ids: list[int]) -> Non
         src = csv_dir / fname
         if not src.exists():
             continue
-        df = pd.read_csv(src)
-        if "study_id" in df.columns:
-            df = df[df.study_id.isin(id_set)]
-        df.to_csv(out_dir / fname, index=False)
+        table = pd.read_csv(src)
+        if "study_id" in table.columns:
+            table = table[table.study_id.isin(id_set)]
+        table.to_csv(out_dir / fname, index=False)
 
     print(f"  Wrote filtered CSVs to {out_dir}/")
 
 
-def write_id_list(out_dir: Path, study_ids: list[int], tag: str) -> Path:
-    """Save the selected study IDs for reproducibility."""
+def write_id_list(out_dir, study_ids, tag):
     path = out_dir / f"selected_ids_{tag}.csv"
     pd.DataFrame({"study_id": study_ids}).to_csv(path, index=False)
     print(f"  Wrote {path}")
     return path
 
 
-def print_next_steps(out_dir: Path) -> None:
-    """Point the user at the actual pipeline entry points."""
+def print_next_steps(out_dir):
     print("\nNext steps:")
     print(f"  1. Inspect boxes:  python scripts/explore_rsna.py --data_dir {out_dir}")
     print(f"  2. Sanity train:   python train.py --data_dir {out_dir} --dataset rsna \\")
@@ -302,8 +300,7 @@ def print_next_steps(out_dir: Path) -> None:
           "--tokenizer anatomy --pos_encoding ordinal")
 
 
-def report_disk(out_dir: Path) -> None:
-    """Report how much space the downloaded images take."""
+def report_disk(out_dir):
     images = out_dir / "train_images"
     if not images.exists():
         return
@@ -315,34 +312,34 @@ def report_disk(out_dir: Path) -> None:
         if not study.is_dir():
             continue
         n_studies += 1
-        for f in study.rglob("*.dcm"):
-            total += f.stat().st_size
+        for dicom_file in study.rglob("*.dcm"):
+            total += dicom_file.stat().st_size
             n_files += 1
 
     print(f"\nOn disk: {n_studies} studies, {n_files} DICOM files, {total / 1e9:.2f} GB")
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(
+def main():
+    parser = argparse.ArgumentParser(
         description="Download RSNA 2024 Lumbar Spine data from Kaggle (via kagglehub)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument(
+    parser.add_argument(
         "--mode",
         required=True,
         choices=["csvs", "smoke", "subset", "full"],
         help="csvs: annotations only | smoke: 25 studies | subset: N studies | full: everything",
     )
-    p.add_argument("--out_dir", default="data/rsna", help="where to put the data")
-    p.add_argument("--csv_dir", default=None, help="where the CSVs live (default: same as out_dir)")
-    p.add_argument("--n", type=int, default=None, help="number of studies (default: 25 smoke, 500 subset)")
-    p.add_argument("--seed", type=int, default=42, help="random seed for study selection")
-    p.add_argument("--context_slices", type=int, default=1,
+    parser.add_argument("--out_dir", default="data/rsna", help="where to put the data")
+    parser.add_argument("--csv_dir", default=None, help="where the CSVs live (default: same as out_dir)")
+    parser.add_argument("--n", type=int, default=None, help="number of studies (default: 25 smoke, 500 subset)")
+    parser.add_argument("--seed", type=int, default=42, help="random seed for study selection")
+    parser.add_argument("--context_slices", type=int, default=1,
                    help="neighbor slices per side to fetch (for 2.5D input)")
-    p.add_argument("--delay", type=float, default=0.25,
+    parser.add_argument("--delay", type=float, default=0.25,
                    help="seconds to pause between file downloads (paces Kaggle's rate limit)")
-    args = p.parse_args()
+    args = parser.parse_args()
 
     load_dotenv()
     check_credentials()
@@ -355,22 +352,22 @@ def main() -> None:
         print("\nNext: python rsna_setup.py --mode subset --n 500")
         return
 
-    if not all((csv_dir / f).exists() for f in CSV_FILES):
+    if not all((csv_dir / name).exists() for name in CSV_FILES):
         print("CSVs not found - downloading them first.\n")
         download_csvs(csv_dir)
         print()
 
     if args.mode == "smoke":
-        n = args.n or 25
-        download_file_level(csv_dir, out_dir, n=n, context_slices=args.context_slices,
-                            tag=f"smoke{n}", delay=args.delay)
+        count = args.n or 25
+        download_file_level(csv_dir, out_dir, count=count, context_slices=args.context_slices,
+                            tag=f"smoke{count}", delay=args.delay)
         report_disk(out_dir)
         print_next_steps(out_dir)
 
     elif args.mode == "subset":
-        n = args.n or 500
-        download_file_level(csv_dir, out_dir, n=n, context_slices=args.context_slices,
-                            tag=f"subset{n}", delay=args.delay)
+        count = args.n or 500
+        download_file_level(csv_dir, out_dir, count=count, context_slices=args.context_slices,
+                            tag=f"subset{count}", delay=args.delay)
         report_disk(out_dir)
         print_next_steps(out_dir)
 

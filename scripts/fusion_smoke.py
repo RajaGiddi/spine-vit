@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import os
 import sys
@@ -13,16 +11,15 @@ from data.rsna_fusion import make_rsna_fusion_splits, rsna_fusion_collate_fn
 from models.spine_fusion import build_fusion_model
 
 
-def _pick_batch(train_ds):
-    """Choose studies exercising full / partial / zero axial coverage."""
+def pick_batch(train_ds):
     full = partial = zero = None
-    for i, s in enumerate(train_ds.samples):
-        k = len(s["levels"])
-        na = len(train_ds.axial_index.get(s["study_id"], {})
-                 .keys() & {lv["level_idx"] for lv in s["levels"]})
-        if na == k and full is None:
+    for i, sample in enumerate(train_ds.samples):
+        level_count = len(sample["levels"])
+        na = len(train_ds.axial_index.get(sample["study_id"], {})
+                 .keys() & {lv["level_idx"] for lv in sample["levels"]})
+        if na == level_count and full is None:
             full = i
-        elif 0 < na < k and partial is None:
+        elif 0 < na < level_count and partial is None:
             partial = i
         elif na == 0 and zero is None:
             zero = i
@@ -36,17 +33,17 @@ def _pick_batch(train_ds):
     return idxs, tags
 
 
-def _finite(name, t):
-    ok = torch.isfinite(t).all().item()
-    print(f"    {name:<22} shape {tuple(t.shape)}  finite={ok}")
-    assert ok, f"{name} has NaN/Inf"
+def check_finite(name, tensor):
+    is_finite = torch.isfinite(tensor).all().item()
+    print(f"    {name:<22} shape {tuple(tensor.shape)}  finite={is_finite}")
+    assert is_finite, f"{name} has NaN/Inf"
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data_dir", required=True)
-    ap.add_argument("--device", default="cpu")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", required=True)
+    parser.add_argument("--device", default="cpu")
+    args = parser.parse_args()
     torch.manual_seed(0)
     np.random.seed(0)
     device = torch.device(args.device)
@@ -61,16 +58,16 @@ def main():
     train_ds, val_ds, test_ds = make_rsna_fusion_splits(args.data_dir, cfg)
     print(f"    train/val/test = {len(train_ds)}/{len(val_ds)}/{len(test_ds)} studies")
 
-    idxs, tags = _pick_batch(train_ds)
+    idxs, tags = pick_batch(train_ds)
     items = [train_ds[i] for i in idxs]
     print("    batch studies (coverage):")
     for i, it in zip(idxs, items):
         print(f"      study {it['study_id']:>10}  sag_levels={it['num_levels']} "
               f"axial={it['axial_num']}  [{tags.get(i,'fill')}]")
     batch = rsna_fusion_collate_fn(items)
-    for k, v in batch.items():
-        if torch.is_tensor(v):
-            batch[k] = v.to(device)
+    for key, value in batch.items():
+        if torch.is_tensor(value):
+            batch[key] = value.to(device)
 
     N = batch["level_indices"].shape[0]
     M = batch["axial_images"].shape[0]
@@ -83,27 +80,27 @@ def main():
 
     print("\n[3] forward-pass shapes per mode (all must be finite):")
     for views, fusion in [("sag", None), ("axial", None), ("both", "concat"), ("both", "attn")]:
-        c = dict(cfg, views=views, fusion=fusion or "attn")
-        model = build_fusion_model(c).to(device).eval()
+        run_config = dict(cfg, views=views, fusion=fusion or "attn")
+        model = build_fusion_model(run_config).to(device).eval()
         name = f"{views}" + (f"/{fusion}" if views == "both" else "")
         with torch.no_grad():
             out = model(batch)
         print(f"  -- mode {name}  (trainable params {model.count_trainable_params()/1e6:.3f}M)")
-        _finite("logits", out["logits"])
-        _finite("encoded_tokens", out["encoded_tokens"])
+        check_finite("logits", out["logits"])
+        check_finite("encoded_tokens", out["encoded_tokens"])
         assert out["logits"].shape == (N, 3), f"expected per-level logits (N,3), got {tuple(out['logits'].shape)}"
         assert out["disc_mask"].sum().item() == N
 
     print("\n[4] alignment invariant: aligned axial token == source token at each slot")
     model = build_fusion_model(dict(cfg, views="both", fusion="attn")).to(device).eval()
     with torch.no_grad():
-        ax = model._axial_tokens(batch)
-        aligned, cov2 = model._axial_aligned(ax, batch["axial_slot"], N)
+        axial_tokens = model._axial_tokens(batch)
+        aligned, cov2 = model._axial_aligned(axial_tokens, batch["axial_slot"], N)
         slot = batch["axial_slot"]
         max_err = 0.0
         for i in range(N):
             if slot[i] >= 0:
-                max_err = max(max_err, (aligned[i] - ax[slot[i]]).abs().max().item())
+                max_err = max(max_err, (aligned[i] - axial_tokens[slot[i]]).abs().max().item())
         miss_err = (aligned[~cov2] - model.missing_axial).abs().max().item() if (~cov2).any() else 0.0
     print(f"    covered scatter max|err| = {max_err:.2e}   masked==placeholder max|err| = {miss_err:.2e}")
     assert max_err < 1e-5 and miss_err < 1e-5
@@ -140,9 +137,9 @@ def main():
     print("\n[6] sag-only study (axial_num==0) flows through both fusion modes without NaN")
     if any(it["axial_num"] == 0 for it in items):
         for fusion in ("concat", "attn"):
-            m = build_fusion_model(dict(cfg, views="both", fusion=fusion)).to(device).eval()
+            model = build_fusion_model(dict(cfg, views="both", fusion=fusion)).to(device).eval()
             with torch.no_grad():
-                o = m(batch)
+                o = model(batch)
             assert torch.isfinite(o["logits"]).all()
             print(f"    {fusion}: OK")
     else:

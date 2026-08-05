@@ -16,8 +16,8 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "configs", "default.yaml")
 
 
 def load_config(overrides):
-    with open(CONFIG_PATH) as f:
-        config = yaml.safe_load(f)
+    with open(CONFIG_PATH) as config_file:
+        config = yaml.safe_load(config_file)
 
     for key in overrides:
         if overrides[key] is not None:
@@ -34,11 +34,11 @@ def load_config(overrides):
             path = os.path.join(config["output_dir"], "detector", "detected_centers.json")
         if not os.path.exists(path):
             raise FileNotFoundError(
-                "--box_source detected needs " + path + ". Run train_detector.py --export first."
+                f"--box_source detected needs {path}. Run train_detector.py --export first."
             )
-        with open(path) as f:
-            config["detected_centers"] = json.load(f)
-        print("[info] loaded detected centers for", len(config["detected_centers"]), "studies")
+        with open(path) as centers_file:
+            config["detected_centers"] = json.load(centers_file)
+        print("loaded detected centers for", len(config["detected_centers"]), "studies")
 
     return config
 
@@ -52,7 +52,7 @@ def resolve_device(name):
         return torch.device("mps")
 
     if name == "cuda" or name == "mps":
-        print("[warn] device", name, "is not available, using cpu instead")
+        print("device", name, "is not available, using cpu instead")
     return torch.device("cpu")
 
 
@@ -64,23 +64,23 @@ def set_seed(seed):
 
 
 def experiment_name(config):
-    name = config["dataset"] + "_" + config["tokenizer"] + "_" + config["pos_encoding"]
-    name = name + "_" + str(config["embed_dim"]) + "_" + str(config["encoder_layers"])
+    name = f"{config['dataset']}_{config['tokenizer']}_{config['pos_encoding']}"
+    name = f"{name}_{config['embed_dim']}_{config['encoder_layers']}"
 
     if config.get("box_source", "oracle") == "detected":
-        name = name + "_det"
+        name = f"{name}_det"
 
     if not config.get("freeze_backbone", True):
-        name = name + "_ft"
+        name = f"{name}_ft"
 
     box_size = config.get("box_size", 32)
     if box_size != 32:
-        name = name + "_b" + str(box_size)
+        name = f"{name}_b{box_size}"
 
     if config.get("head", "ce") == "coral":
-        name = name + "_coral"
+        name = f"{name}_coral"
 
-    return name + "_s" + str(config["seed"])
+    return f"{name}_s{config['seed']}"
 
 
 def format_metric(value):
@@ -101,7 +101,7 @@ def get_dataloaders(config):
         train_ds, val_ds, test_ds = make_spider_splits(config["data_dir"], config)
         collate = spider_collate_fn
     else:
-        raise ValueError("Unknown dataset: " + str(config["dataset"]))
+        raise ValueError(f"Unknown dataset: {config['dataset']}")
 
     limit = config.get("limit_samples")
     if limit:
@@ -176,9 +176,9 @@ def run_epoch(model, loader, criterion, device, config, optimizer=None, desc="",
                 optimizer.zero_grad()
                 loss.backward()
                 trainable = []
-                for p in model.parameters():
-                    if p.requires_grad:
-                        trainable.append(p)
+                for parameter in model.parameters():
+                    if parameter.requires_grad:
+                        trainable.append(parameter)
                 torch.nn.utils.clip_grad_norm_(trainable, config.get("grad_clip", 1.0))
                 optimizer.step()
 
@@ -226,7 +226,7 @@ def build_criterion(config, train_dataset, class_weights, device):
         def criterion(logits, targets):
             return coral_loss(logits, targets, pos_weight)
 
-        print("[info] head: CORAL ordinal, pos_weight", [round(w, 2) for w in pos_weight.tolist()])
+        print("head: CORAL ordinal, pos_weight", [round(weight, 2) for weight in pos_weight.tolist()])
         return criterion, coral_predict
 
     criterion = torch.nn.CrossEntropyLoss(weight=class_weights, ignore_index=-1)
@@ -246,31 +246,31 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     if config.get("skip_if_done") and os.path.exists(os.path.join(out_dir, "test_results.json")):
-        print("[skip]", out_dir, "is already complete")
+        print(out_dir, "is already complete")
         return
 
-    with open(os.path.join(out_dir, "config.json"), "w") as f:
-        json.dump(config, f, indent=2)
-    print("[info] experiment ->", out_dir)
-    print("[info] device", device, "dataset", config["dataset"], "task", config["task"])
-    print("[info] tokenizer", config["tokenizer"], "pos_encoding", config["pos_encoding"])
+    with open(os.path.join(out_dir, "config.json"), "w") as config_file:
+        json.dump(config, config_file, indent=2)
+    print("experiment ->", out_dir)
+    print("device", device, "dataset", config["dataset"], "task", config["task"])
+    print("tokenizer", config["tokenizer"], "pos_encoding", config["pos_encoding"])
 
     train_ds, train_loader, val_loader, test_loader = get_dataloaders(config)
 
     model = build_model(config).to(device)
-    print("[info] trainable params: %.3fM" % (model.count_trainable_params() / 1e6))
+    print("trainable params: %.3fM" % (model.count_trainable_params() / 1e6))
 
     weight_scheme = config.get("class_weight", "inverse")
     class_weights = compute_class_weights(train_ds, config["num_classes"], scheme=weight_scheme)
     class_weights = class_weights.to(device)
-    print("[info] class weights (%s):" % weight_scheme, [round(w, 3) for w in class_weights.tolist()])
+    print("class weights (%s):" % weight_scheme, [round(weight, 3) for weight in class_weights.tolist()])
 
     criterion, predict_fn = build_criterion(config, train_ds, class_weights, device)
 
     trainable = []
-    for p in model.parameters():
-        if p.requires_grad:
-            trainable.append(p)
+    for parameter in model.parameters():
+        if parameter.requires_grad:
+            trainable.append(parameter)
     optimizer = torch.optim.AdamW(trainable, lr=config["lr"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["epochs"],
                                                            eta_min=1e-6)
@@ -295,11 +295,11 @@ def main():
 
     for epoch in range(1, config["epochs"] + 1):
         train_res = run_epoch(model, train_loader, criterion, device, config, optimizer,
-                              desc="train " + str(epoch), predict_fn=predict_fn)
+                              desc=f"train {epoch}", predict_fn=predict_fn)
         train_metrics = compute_metrics(train_res["preds"], train_res["targets"],
                                         config["num_classes"])
         val_res = evaluate_split(model, val_loader, criterion, device, config,
-                                 desc="val " + str(epoch), predict_fn=predict_fn)
+                                 desc=f"val {epoch}", predict_fn=predict_fn)
         scheduler.step()
 
         val_metrics = val_res["metrics"]
@@ -320,8 +320,8 @@ def main():
               "path P/R", format_metric(attribution.get("pathology_precision")),
               "/", format_metric(attribution.get("pathology_recall")))
 
-        with open(os.path.join(out_dir, "history.json"), "w") as f:
-            json.dump(history, f, indent=2)
+        with open(os.path.join(out_dir, "history.json"), "w") as history_file:
+            json.dump(history, history_file, indent=2)
 
         val_scores.append(val_metrics.get(select_metric, 0.0))
         recent = val_scores[-select_window:]
@@ -342,7 +342,7 @@ def main():
         else:
             epochs_since_best = epochs_since_best + 1
             if epochs_since_best >= config["patience"]:
-                print("[info] early stopping at epoch", epoch,
+                print("early stopping at epoch", epoch,
                       "- best smoothed val", select_metric, "%.3f" % best_score,
                       "at epoch", best_epoch)
                 break
@@ -358,28 +358,28 @@ def main():
         "attribution": test_res["attribution"],
         "best_epoch": best_epoch,
     }
-    with open(os.path.join(out_dir, "test_results.json"), "w") as f:
-        json.dump(test_out, f, indent=2)
+    with open(os.path.join(out_dir, "test_results.json"), "w") as results_file:
+        json.dump(test_out, results_file, indent=2)
 
     predictions = {}
     for key in ["studyids", "levels", "preds", "targets"]:
         values = []
-        for x in test_res[key]:
-            values.append(int(x))
+        for value in test_res[key]:
+            values.append(int(value))
         predictions[key] = values
-    with open(os.path.join(out_dir, "test_predictions.json"), "w") as f:
-        json.dump(predictions, f)
+    with open(os.path.join(out_dir, "test_predictions.json"), "w") as predictions_file:
+        json.dump(predictions, predictions_file)
 
     test_metrics = test_res["metrics"]
     test_attribution = test_res["attribution"]
-    print("[info] TEST macro_f1 %.3f kappa %.3f" % (test_metrics.get("macro_f1", 0),
+    print("TEST macro_f1 %.3f kappa %.3f" % (test_metrics.get("macro_f1", 0),
                                                     test_metrics.get("kappa", 0)))
-    print("[info] worst_lvl_acc", format_metric(test_attribution.get("worst_level_accuracy")),
+    print("worst_lvl_acc", format_metric(test_attribution.get("worst_level_accuracy")),
           "on", test_attribution.get("n_studies_with_pathology", 0), "studies")
-    print("[info] pathology P/R", format_metric(test_attribution.get("pathology_precision")),
+    print("pathology P/R", format_metric(test_attribution.get("pathology_precision")),
           "/", format_metric(test_attribution.get("pathology_recall")),
           "fp_rate", format_metric(test_attribution.get("pathology_fp_rate")))
-    print("[info] results saved to", out_dir)
+    print("results saved to", out_dir)
 
 
 def parse_args():

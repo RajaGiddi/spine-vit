@@ -1,38 +1,27 @@
-from __future__ import annotations
-
 import numpy as np
 from PIL import Image
 
 
-def _to_chw(image: np.ndarray):
-    """Return (image_as_CHW, was_2d) so we can restore the caller's rank."""
+def to_chw(image):
     if image.ndim == 2:
         return image[None, :, :], True
     if image.ndim == 3:
         return image, False
-    raise ValueError(f"Expected 2D (H,W) or 3D (C,H,W) image, got shape {image.shape}")
+    raise ValueError(f"Expected a (H,W) or (C,H,W) image, got shape {image.shape}")
 
 
-def _resize_chw(image: np.ndarray, out_h: int, out_w: int) -> np.ndarray:
-    """Bilinear resize each channel of a (C, H, W) float32 array."""
-    chans = []
-    for c in range(image.shape[0]):
-        pil = Image.fromarray(image[c].astype(np.float32), mode="F")
+def resize_channels(image, out_h, out_w):
+    channels = []
+    for channel in range(image.shape[0]):
+        pil = Image.fromarray(image[channel].astype(np.float32), mode="F")
         pil = pil.resize((out_w, out_h), Image.BILINEAR)
-        chans.append(np.asarray(pil, dtype=np.float32))
-    return np.stack(chans, axis=0)
+        channels.append(np.asarray(pil, dtype=np.float32))
+    return np.stack(channels, axis=0)
 
 
 class SpineAugmentation:
-    def __init__(
-        self,
-        image_size: int = 224,
-        p_hflip: float = 0.5,
-        vshift_frac: float = 0.10,
-        intensity_frac: float = 0.05,
-        min_crop_area: float = 0.85,
-        noise_std: float = 0.01,
-    ):
+    def __init__(self, image_size=224, p_hflip=0.5, vshift_frac=0.10,
+                 intensity_frac=0.05, min_crop_area=0.85, noise_std=0.01):
         self.image_size = image_size
         self.p_hflip = p_hflip
         self.vshift_frac = vshift_frac
@@ -40,48 +29,67 @@ class SpineAugmentation:
         self.min_crop_area = min_crop_area
         self.noise_std = noise_std
 
-    def __call__(self, image: np.ndarray, boxes: np.ndarray):
-        img, was_2d = _to_chw(image)
-        img = img.astype(np.float32).copy()
-        boxes = np.asarray(boxes, dtype=np.float32).copy()
-        _, H, W = img.shape
+    def vertical_shift(self, image, boxes, height):
+        shift = int(round(np.random.uniform(-self.vshift_frac, self.vshift_frac) * height))
+        if shift == 0:
+            return image, boxes
 
-        dy = int(round(np.random.uniform(-self.vshift_frac, self.vshift_frac) * H))
-        if dy != 0:
-            shifted = np.zeros_like(img)
-            if dy > 0:
-                shifted[:, dy:, :] = img[:, : H - dy, :]
-            else:
-                shifted[:, : H + dy, :] = img[:, -dy:, :]
-            img = shifted
-            boxes[:, [1, 3]] += dy
+        shifted = np.zeros_like(image)
+        if shift > 0:
+            shifted[:, shift:, :] = image[:, :height - shift, :]
+        else:
+            shifted[:, :height + shift, :] = image[:, -shift:, :]
 
-        img *= np.random.uniform(1.0 - self.intensity_frac, 1.0 + self.intensity_frac)
+        boxes[:, [1, 3]] += shift
+        return shifted, boxes
 
-        if np.random.rand() < self.p_hflip:
-            img = img[:, :, ::-1].copy()
-            x1 = boxes[:, 0].copy()
-            x2 = boxes[:, 2].copy()
-            boxes[:, 0] = W - x2
-            boxes[:, 2] = W - x1
+    def horizontal_flip(self, image, boxes, width):
+        image = image[:, :, ::-1].copy()
+        left = boxes[:, 0].copy()
+        right = boxes[:, 2].copy()
+        boxes[:, 0] = width - right
+        boxes[:, 2] = width - left
+        return image, boxes
 
+    def crop_and_resize(self, image, boxes, height, width):
         area_frac = np.random.uniform(self.min_crop_area, 1.0)
         side = float(np.sqrt(area_frac))
-        crop_h = max(1, int(round(H * side)))
-        crop_w = max(1, int(round(W * side)))
-        top = np.random.randint(0, H - crop_h + 1)
-        left = np.random.randint(0, W - crop_w + 1)
-        img = img[:, top : top + crop_h, left : left + crop_w]
+        crop_h = max(1, int(round(height * side)))
+        crop_w = max(1, int(round(width * side)))
+
+        top = np.random.randint(0, height - crop_h + 1)
+        left = np.random.randint(0, width - crop_w + 1)
+
+        image = image[:, top:top + crop_h, left:left + crop_w]
         boxes[:, [0, 2]] -= left
         boxes[:, [1, 3]] -= top
-        sx = self.image_size / crop_w
-        sy = self.image_size / crop_h
-        boxes[:, [0, 2]] *= sx
-        boxes[:, [1, 3]] *= sy
-        img = _resize_chw(img, self.image_size, self.image_size)
+
+        boxes[:, [0, 2]] *= self.image_size / crop_w
+        boxes[:, [1, 3]] *= self.image_size / crop_h
+
+        image = resize_channels(image, self.image_size, self.image_size)
+        return image, boxes
+
+    def __call__(self, image, boxes):
+        image, was_2d = to_chw(image)
+        image = image.astype(np.float32).copy()
+        boxes = np.asarray(boxes, dtype=np.float32).copy()
+        height = image.shape[1]
+        width = image.shape[2]
+
+        image, boxes = self.vertical_shift(image, boxes, height)
+
+        image = image * np.random.uniform(1.0 - self.intensity_frac,
+                                          1.0 + self.intensity_frac)
+
+        if np.random.rand() < self.p_hflip:
+            image, boxes = self.horizontal_flip(image, boxes, width)
+
+        image, boxes = self.crop_and_resize(image, boxes, height, width)
 
         if self.noise_std > 0:
-            img = img + np.random.normal(0.0, self.noise_std, size=img.shape).astype(np.float32)
+            noise = np.random.normal(0.0, self.noise_std, size=image.shape)
+            image = image + noise.astype(np.float32)
 
         boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, self.image_size)
         boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, self.image_size)
@@ -89,5 +97,6 @@ class SpineAugmentation:
         boxes[:, 3] = np.maximum(boxes[:, 3], boxes[:, 1])
 
         if was_2d:
-            img = img[0]
-        return img.astype(np.float32), boxes.astype(np.float32)
+            image = image[0]
+
+        return image.astype(np.float32), boxes.astype(np.float32)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import glob
 import json
@@ -13,11 +11,11 @@ import matplotlib.pyplot as plt
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--experiments_dir", default="outputs_modal")
-    ap.add_argument("--localization", default=None, help="path to localization_per_study.json")
-    ap.add_argument("--out", default=None)
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--experiments_dir", default="outputs_modal")
+    parser.add_argument("--localization", default=None, help="path to localization_per_study.json")
+    parser.add_argument("--out", default=None)
+    args = parser.parse_args()
 
     loc_path = args.localization or os.path.join(args.experiments_dir, "detector", "localization_per_study.json")
     if not os.path.exists(loc_path):
@@ -28,37 +26,37 @@ def main():
         return
     loc = {str(k): v for k, v in json.load(open(loc_path)).items()}
 
-    dirs = [d for d in sorted(glob.glob(os.path.join(args.experiments_dir, "*_det_s*")))
-            if os.path.exists(os.path.join(d, "test_predictions.json"))]
+    dirs = [run_dir for run_dir in sorted(glob.glob(os.path.join(args.experiments_dir, "*_det_s*")))
+            if os.path.exists(os.path.join(run_dir, "test_predictions.json"))]
     if not dirs:
         print(f"[warn] no *_det_s* runs with test_predictions.json under {args.experiments_dir}")
         return
-    print(f"[info] {len(dirs)} detected grading run(s): {[os.path.basename(d) for d in dirs]}")
+    print(f"[info] {len(dirs)} detected grading run(s): {[os.path.basename(run_dir) for run_dir in dirs]}")
 
     correct, total = defaultdict(int), defaultdict(int)
-    for d in dirs:
-        tp = json.load(open(os.path.join(d, "test_predictions.json")))
-        for sid, tg, pr in zip(tp["studyids"], tp["targets"], tp["preds"]):
+    for run_dir in dirs:
+        tp = json.load(open(os.path.join(run_dir, "test_predictions.json")))
+        for study_id, tg, pr in zip(tp["studyids"], tp["targets"], tp["preds"]):
             if tg == -1:
                 continue
-            correct[str(sid)] += int(pr == tg)
-            total[str(sid)] += 1
+            correct[str(study_id)] += int(pr == tg)
+            total[str(study_id)] += 1
 
-    err, acc = [], []
-    for sid, tot in total.items():
-        e = loc.get(sid)
-        if e is None:
+    err, accuracy = [], []
+    for study_id, tot in total.items():
+        error = loc.get(study_id)
+        if error is None:
             continue
-        err.append(float(e))
-        acc.append(correct[sid] / tot)
-    err, acc = np.array(err), np.array(acc)
+        err.append(float(error))
+        accuracy.append(correct[study_id] / tot)
+    err, accuracy = np.array(err), np.array(accuracy)
     if err.size < 3:
-        print("[warn] too few studies to correlate")
+        print("too few studies to correlate")
         return
 
     from scipy.stats import pearsonr, spearmanr
-    r, p = pearsonr(err, acc)
-    rs, ps = spearmanr(err, acc)
+    r, p = pearsonr(err, accuracy)
+    rs, ps = spearmanr(err, accuracy)
     print(f"\nstudies: {err.size}  |  corr(localization_err, grading_acc): "
           f"Pearson {r:+.3f} (p={p:.2g}), Spearman {rs:+.3f} (p={ps:.2g})")
 
@@ -66,11 +64,11 @@ def main():
     labels = ["≤5mm", "5-8mm", "8-12mm", ">12mm"]
     means, sems, ns = [], [], []
     for i in range(len(edges) - 1):
-        m = (err >= edges[i]) & (err < edges[i + 1])
-        a = acc[m]
-        means.append(float(a.mean()) if a.size else np.nan)
-        sems.append(float(a.std() / max(1, np.sqrt(a.size))) if a.size else 0.0)
-        ns.append(int(m.sum()))
+        mask = (err >= edges[i]) & (err < edges[i + 1])
+        accuracies = accuracy[mask]
+        means.append(float(accuracies.mean()) if accuracies.size else np.nan)
+        sems.append(float(accuracies.std() / max(1, np.sqrt(accuracies.size))) if accuracies.size else 0.0)
+        ns.append(int(mask.sum()))
         print(f"  {labels[i]:7s}: grading_acc {means[-1]:.3f}  (n={ns[-1]})")
 
     out = args.out or os.path.join(args.experiments_dir, "evaluation", "localization_vs_grading.png")
@@ -78,16 +76,19 @@ def main():
     fig, ax = plt.subplots(figsize=(7, 4.5))
     x = np.arange(len(labels))
     ax.bar(x, means, yerr=sems, capsize=4, color="#3b6ea5")
-    for i, (mn, n) in enumerate(zip(means, ns)):
-        if not np.isnan(mn):
-            ax.text(i, mn + 0.02, f"{mn:.2f}\n(n={n})", ha="center", fontsize=8)
-    ax.set_xticks(x); ax.set_xticklabels(labels)
+    for i, (mean_value, count) in enumerate(zip(means, ns)):
+        if not np.isnan(mean_value):
+            ax.text(i, mean_value + 0.02, f"{mean_value:.2f}\n(n={count})", ha="center", fontsize=8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
     ax.set_xlabel("Per-study localization error")
     ax.set_ylabel("Grading exact-accuracy")
     ax.set_ylim(0, 1)
     ax.set_title(f"Grading accuracy vs detection error  (Spearman {rs:+.2f}, p={ps:.2g})")
     ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout(); fig.savefig(out, dpi=150); plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
 
     summary = {"n_studies": int(err.size), "pearson_r": r, "pearson_p": p,
                "spearman_r": rs, "spearman_p": ps,
