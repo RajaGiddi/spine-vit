@@ -55,17 +55,11 @@ Augmented runs, 5 seeds (42–46), mean ± sd. Δ is against the one-slice sagit
 | fusion, concat | 0.697 ± 0.067 | 0.673 ± 0.036 | +0.202 |
 | fusion, attention | 0.626 ± 0.055 | 0.519 ± 0.057 | +0.048 |
 
-Severity κ never separates significantly from the control. Full paired tests, the
-budget-vs-acquisition decomposition, and the fusion nulls are in
+Severity κ never separates significantly from the control. Paired within seed, the attribution
+gain splits into slice budget (+0.105, p = 0.005) and axial acquisition (+0.078, p = 0.050).
+Full paired tests, that decomposition, and the fusion nulls are in
 [docs/task2_writeup.md](docs/task2_writeup.md); per-run numbers are in
 [results/fusion_results.csv](results/fusion_results.csv).
-
-![Attribution gain split into slice budget and axial acquisition](figures/plane_decomposition.png)
-
-The attribution gain splits into two halves, paired within seed: slice budget (five
-parasagittal slices instead of one) and axial acquisition (the plane and its expert slice
-choice, on top of the matched budget). The two are anticorrelated by construction, since they
-share the five-slice sagittal arm.
 
 ![Correct grading, a misattributed level, and a detector failure](figures/qualitative.png)
 
