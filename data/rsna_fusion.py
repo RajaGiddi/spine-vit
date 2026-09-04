@@ -6,6 +6,7 @@ import torch
 from .rsna_dataset import RSNADataset, rsna_collate_fn, load_dicom_slice, split_study_ids
 from .rsna_dataset import build_rsna_index
 from .rsna_axial import build_axial_index
+from .rsna_axial_fixed import build_axial_index_fixed
 from .transforms import SpineAugmentation, resize_channels
 
 
@@ -232,8 +233,17 @@ def make_rsna_fusion_splits(data_dir, config):
     test_frac = config.get("test_frac", 0.15)
 
     samples = build_rsna_index(data_dir, config.get("task", "stenosis"))
-    axial_index = build_axial_index(
-        data_dir, posterior_offset=config.get("axial_posterior_offset", 0.0))
+    # "annotated" keeps the radiologist's slice; "fixed" picks it by geometry.
+    # Default is unchanged, so existing results are untouched.
+    selection = config.get("axial_slice_selection", "annotated")
+    if selection == "fixed":
+        axial_index = build_axial_index_fixed(
+            data_dir, posterior_offset=config.get("axial_posterior_offset", 0.0))
+    elif selection == "annotated":
+        axial_index = build_axial_index(
+            data_dir, posterior_offset=config.get("axial_posterior_offset", 0.0))
+    else:
+        raise ValueError(f"axial_slice_selection must be annotated or fixed, got {selection!r}")
 
     val_ids, test_ids = split_study_ids(samples, seed, val_frac, test_frac)
 

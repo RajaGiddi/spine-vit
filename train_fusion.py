@@ -11,6 +11,7 @@ from train import load_config, resolve_device, set_seed, run_epoch, evaluate_spl
 from utils.metrics import compute_metrics, compute_class_weights
 from data.rsna_fusion import make_rsna_fusion_splits, rsna_fusion_collate_fn
 from data.rsna_axial import build_axial_index
+from data.rsna_axial_fixed import build_axial_index_fixed
 
 
 def fusion_experiment_name(config):
@@ -30,6 +31,9 @@ def fusion_experiment_name(config):
     sag_slices = int(config.get("sag_slices", 1))
     if sag_slices > 1:
         name = f"{name}_sag{sag_slices}"
+
+    if config.get("axial_slice_selection", "annotated") == "fixed":
+        name = f"{name}_fixedslice"
 
     if config.get("augment"):
         name = f"{name}_aug"
@@ -59,8 +63,9 @@ def get_fusion_dataloaders(config):
     return train_ds, train_loader, val_loader, test_loader
 
 
-def axial_coverage_set(data_dir):
-    axial = build_axial_index(data_dir)
+def axial_coverage_set(data_dir, selection="annotated"):
+    axial = (build_axial_index_fixed(data_dir) if selection == "fixed"
+             else build_axial_index(data_dir))
     covered = set()
     for study_id in axial:
         for level_index in axial[study_id]:
@@ -93,6 +98,7 @@ def main():
     config.setdefault("axial_box_size", config.get("box_size", 32))
     config.setdefault("augment", False)
     config.setdefault("sag_slices", 1)
+    config.setdefault("axial_slice_selection", "annotated")
 
     set_seed(config["seed"])
     device = resolve_device(config["device"])
@@ -193,7 +199,8 @@ def main():
     model.load_state_dict(checkpoint["model_state"])
     test_res = evaluate_split(model, test_loader, criterion, device, config, desc="test")
 
-    covered = axial_coverage_set(config["data_dir"])
+    covered = axial_coverage_set(config["data_dir"],
+                                 config.get("axial_slice_selection", "annotated"))
     axial_metrics, n_axial = subset_metrics(test_res, covered, config["num_classes"])
 
     test_out = {
@@ -240,6 +247,11 @@ def parse_args():
                         choices=["ordinal", "learned", "none"])
     parser.add_argument("--box_size", type=int, default=None,
                         help="sagittal ROI size in resized pixels")
+    parser.add_argument("--axial_slice_selection", type=str, default=None,
+                        choices=["annotated", "fixed"],
+                        help="annotated: radiologist's slice (default). "
+                             "fixed: nearest axial slice to the sagittal disc centre, "
+                             "which removes expert slice selection")
     parser.add_argument("--axial_box_size", type=int, default=None,
                         help="axial ROI size in resized pixels")
     parser.add_argument("--augment", action="store_true", default=None,
