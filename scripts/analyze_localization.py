@@ -5,6 +5,7 @@ import os
 from collections import defaultdict
 
 import numpy as np
+from scipy.stats import pearsonr, spearmanr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -36,7 +37,7 @@ def main():
     correct, total = defaultdict(int), defaultdict(int)
     for run_dir in dirs:
         tp = json.load(open(os.path.join(run_dir, "test_predictions.json")))
-        for study_id, tg, pr in zip(tp["studyids"], tp["targets"], tp["preds"]):
+        for study_id, tg, pr in zip(tp["studyids"], tp["targets"], tp["predictions"]):
             if tg == -1:
                 continue
             correct[str(study_id)] += int(pr == tg)
@@ -54,7 +55,6 @@ def main():
         print("too few studies to correlate")
         return
 
-    from scipy.stats import pearsonr, spearmanr
     r, p = pearsonr(err, accuracy)
     rs, ps = spearmanr(err, accuracy)
     print(f"\nstudies: {err.size}  |  corr(localization_err, grading_acc): "

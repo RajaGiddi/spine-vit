@@ -14,6 +14,7 @@ class DiscHeatmapDetector(nn.Module):
         self.backbone = build_backbone(config)
         backbone_dim = getattr(self.backbone, "embed_dim", config.get("backbone_dim", 384))
 
+        # Squash the channels down first, the rest of the decoder is cheap after that
         self.reduce = nn.Sequential(nn.Conv2d(backbone_dim, hidden, 1), nn.GELU())
         self.head = nn.Sequential(
             nn.Conv2d(hidden, 64, 3, padding=1),
@@ -24,8 +25,10 @@ class DiscHeatmapDetector(nn.Module):
     def forward(self, x):
         feat = self.backbone(x)
         hidden = self.reduce(feat)
-        hidden = F.interpolate(hidden, size=(self.out_size, self.out_size), mode="bilinear",
-                          align_corners=False)
+
+        # Upsample then convolve, a transposed conv gives checkerboard artifacts here
+        hidden = F.interpolate(hidden, size=(self.out_size, self.out_size),
+                               mode="bilinear", align_corners=False)
         return self.head(hidden)
 
     def count_trainable_params(self):
@@ -37,5 +40,5 @@ class DiscHeatmapDetector(nn.Module):
 
 
 def build_detector(config, out_size=56):
-    return DiscHeatmapDetector(config, num_levels=config.get("num_levels", 5),
-                               out_size=out_size)
+    num_levels = config.get("num_levels", 5)
+    return DiscHeatmapDetector(config, num_levels=num_levels, out_size=out_size)

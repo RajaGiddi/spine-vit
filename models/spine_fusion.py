@@ -63,6 +63,7 @@ class SpineFusionGrader(nn.Module):
                               batch["num_levels"], images=batch["images"])
 
     def sag_tokens_multi(self, batch):
+        # We read several parasagittal slices and average the tokens so that the sagittal side gets the same slice count as the axial side
         multi = batch["sag_multi_images"]
         num_slices = multi.shape[1]
 
@@ -81,6 +82,8 @@ class SpineFusionGrader(nn.Module):
 
     def axial_tokens(self, batch):
         axial_images = batch["axial_images"]
+
+        # Some batches have no axial slice at all, hand back an empty block
         if axial_images.shape[0] == 0:
             return axial_images.new_zeros(0, self.view_embedding.embedding_dim)
 
@@ -89,6 +92,8 @@ class SpineFusionGrader(nn.Module):
                               batch["axial_level_indices"], None, images=axial_images)
 
     def align_axial(self, axial_tokens, slot, n_total):
+        # Slot says which axial token belongs to which sagittal one, -1 means none.
+        # Levels with no axial slice get the learned placeholder instead.
         covered = slot >= 0
         aligned = self.missing_axial.unsqueeze(0).expand(n_total, -1).clone()
         if covered.any() and axial_tokens.shape[0] > 0:
@@ -96,6 +101,7 @@ class SpineFusionGrader(nn.Module):
         return aligned, covered
 
     def view_embed(self, view_id, reference):
+        # 0 for sagittal, 1 for axial
         indices = torch.full((reference.shape[0],), view_id, dtype=torch.long,
                              device=reference.device)
         return self.view_embedding(indices)
@@ -117,6 +123,7 @@ class SpineFusionGrader(nn.Module):
         axial_offset = 0
         position = 0
 
+        # Build one sequence per study: its sagittal tokens then its axial ones, and note where the sagittal ones landed so we can read them back out.
         for i in range(len(num_levels)):
             count = num_levels[i]
             axial_count = axial_num[i]
@@ -129,8 +136,8 @@ class SpineFusionGrader(nn.Module):
 
             if axial_count > 0:
                 combined_tokens.append(axial[axial_offset:axial_offset + axial_count])
-                combined_levels.append(
-                    batch["axial_level_indices"][axial_offset:axial_offset + axial_count])
+                axial_levels = batch["axial_level_indices"][axial_offset:axial_offset + axial_count]
+                combined_levels.append(axial_levels)
                 position = position + axial_count
 
             combined_counts.append(count + axial_count)
@@ -141,6 +148,7 @@ class SpineFusionGrader(nn.Module):
         level_indices = torch.cat(combined_levels, 0)
         level_types = torch.ones_like(level_indices)
 
+        # Attention mixes across view and level, then we take the sagittal slots back
         encoded = self.encoder(tokens, level_indices, level_types, combined_counts)
         readout = torch.tensor(readout_positions, dtype=torch.long, device=encoded.device)
         return encoded[readout]

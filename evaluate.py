@@ -9,6 +9,7 @@ import torch
 from models import build_model
 from utils.metrics import compute_metrics, LevelAttributionAnalyzer, RSNA_LEVEL_NAMES
 from utils import visualization as viz
+from train import get_dataloaders, move_batch
 
 CLASS_NAMES = {
     "stenosis": ["Normal/Mild", "Moderate", "Severe"],
@@ -55,8 +56,6 @@ def load_json(path):
 
 
 def run_test_inference(exp_dir, config, device):
-    from train import get_dataloaders, move_batch
-
     train_ds, train_loader, val_loader, test_loader = get_dataloaders(config)
 
     model = build_model(config).to(device)
@@ -71,7 +70,7 @@ def run_test_inference(exp_dir, config, device):
         level_names = None
     analyzer = LevelAttributionAnalyzer(level_names=level_names, num_classes=config["num_classes"])
 
-    all_preds = []
+    all_predictions = []
     all_targets = []
     all_levels = []
     sample_batch = None
@@ -87,24 +86,24 @@ def run_test_inference(exp_dir, config, device):
                 out = model(batch)
 
             targets = batch["targets"][out["disc_mask"]]
-            preds = out["logits"].argmax(-1)
-            all_preds.append(preds.cpu().numpy())
+            predictions = out["logits"].argmax(-1)
+            all_predictions.append(predictions.cpu().numpy())
             all_targets.append(targets.cpu().numpy())
             all_levels.append(out["disc_level_indices"].cpu().numpy())
 
-    if all_preds:
-        preds = np.concatenate(all_preds)
+    if all_predictions:
+        predictions = np.concatenate(all_predictions)
         targets = np.concatenate(all_targets)
         levels = np.concatenate(all_levels)
     else:
-        preds = np.array([])
+        predictions = np.array([])
         targets = np.array([])
         levels = np.array([])
 
-    analyzer.update(preds, targets, levels)
-    metrics = compute_metrics(preds, targets, config["num_classes"])
+    analyzer.update(predictions, targets, levels)
+    metrics = compute_metrics(predictions, targets, config["num_classes"])
     attribution = analyzer.compute()
-    return metrics, attribution, preds, targets, levels, sample_batch, attention
+    return metrics, attribution, predictions, targets, levels, sample_batch, attention
 
 
 def make_attention_figures(config, sample_batch, attention, eval_dir):
@@ -141,10 +140,10 @@ def make_attention_figures(config, sample_batch, attention, eval_dir):
                                os.path.join(eval_dir, "attention_overlay.png"))
 
 
-def generate_per_experiment_figures(exp_dir, config, preds, targets, eval_dir):
+def generate_per_experiment_figures(exp_dir, config, predictions, targets, eval_dir):
     name = os.path.basename(exp_dir)
     class_names = CLASS_NAMES[config["task"]]
-    viz.plot_grade_confusion_matrix(targets, preds, class_names, f"Confusion - {name}",
+    viz.plot_grade_confusion_matrix(targets, predictions, class_names, f"Confusion - {name}",
                                     os.path.join(eval_dir, f"confusion_{name}.png"))
 
     history = load_json(os.path.join(exp_dir, "history.json"))
@@ -348,9 +347,9 @@ def main():
                 continue
             print(name)
             results = run_test_inference(exp_dir, config, device)
-            metrics, attribution, preds, targets, levels, sample_batch, attention = results
+            metrics, attribution, predictions, targets, levels, sample_batch, attention = results
             if args.generate_figures:
-                generate_per_experiment_figures(exp_dir, config, preds, targets, eval_dir)
+                generate_per_experiment_figures(exp_dir, config, predictions, targets, eval_dir)
                 make_attention_figures(config, sample_batch, attention, eval_dir)
 
         worst_lvl = attribution.get("worst_level_accuracy")

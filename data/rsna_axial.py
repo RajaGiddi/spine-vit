@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import pydicom
 
 from .rsna_dataset import LEVELS, LEVEL_TO_IDX, load_dicom_slice
 
@@ -143,8 +144,6 @@ def load_axial_slice(data_dir, study_id, series, instance):
 
 
 def axial_box_mm(data_dir, study_id, series, instance, box_px, image_size=224):
-    import pydicom
-
     path = axial_dicom_path(data_dir, study_id, series, instance)
     dicom = pydicom.dcmread(path, stop_before_pixels=True)
 

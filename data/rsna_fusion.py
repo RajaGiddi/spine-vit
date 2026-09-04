@@ -4,6 +4,8 @@ import numpy as np
 import torch
 
 from .rsna_dataset import RSNADataset, rsna_collate_fn, load_dicom_slice, split_study_ids
+from .rsna_dataset import build_rsna_index
+from .rsna_axial import build_axial_index
 from .transforms import SpineAugmentation, resize_channels
 
 
@@ -225,9 +227,6 @@ def rsna_fusion_collate_fn(batch):
 
 
 def make_rsna_fusion_splits(data_dir, config):
-    from .rsna_dataset import build_rsna_index
-    from .rsna_axial import build_axial_index
-
     seed = config.get("seed", 42)
     val_frac = config.get("val_frac", 0.15)
     test_frac = config.get("test_frac", 0.15)

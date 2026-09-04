@@ -1,4 +1,5 @@
 import numpy as np
+import pydicom
 import torch
 from torch.utils.data import Dataset
 
@@ -14,8 +15,6 @@ class RSNADetectorDataset(Dataset):
         return len(self.base)
 
     def read_mm_scale(self, sample):
-        import pydicom
-
         path = self.base.dicom_path(sample["study_id"], sample["series_id"],
                                     sample["instance_number"])
         dicom = pydicom.dcmread(path, stop_before_pixels=True)

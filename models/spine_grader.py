@@ -15,6 +15,7 @@ class SpineGrader(nn.Module):
 
         self.backbone = build_backbone(config)
 
+        # The backbone decides the feature width, so copy those onto the config the tokenizer sees. copy first, we do not want to edit the caller's dict
         config = dict(config)
         config["backbone_dim"] = getattr(self.backbone, "embed_dim",
                                          config.get("backbone_dim", 384))
@@ -22,6 +23,7 @@ class SpineGrader(nn.Module):
                                        config.get("patch_size", 14))
 
         self.tokenizer = build_tokenizer(config)
+
         self.encoder = AnatomyEncoder(
             embed_dim=config.get("embed_dim", 256),
             num_heads=config.get("encoder_heads", 4),
@@ -39,6 +41,7 @@ class SpineGrader(nn.Module):
         )
 
     def make_tokens(self, batch):
+        # The cast_crop baseline cuts from the raw image, so it needs no feature map
         if self.config.get("tokenizer") == "cast_crop":
             feature_map = None
         else:
@@ -53,27 +56,30 @@ class SpineGrader(nn.Module):
                                batch["num_levels"])
         logits, disc_mask = self.heads(encoded, batch["level_types"], task=self.task)
 
+        disc_levels = batch["level_indices"][disc_mask]
         return {
             "logits": logits,
             "disc_mask": disc_mask,
             "encoded_tokens": encoded,
-            "disc_level_indices": batch["level_indices"][disc_mask],
+            "disc_level_indices": disc_levels,
         }
 
-    @torch.no_grad()
     def forward_with_attention(self, batch):
-        tokens = self.make_tokens(batch)
-        encoded, attention = self.encoder.forward_with_attention(
-            tokens, batch["level_indices"], batch["level_types"], batch["num_levels"])
-        logits, disc_mask = self.heads(encoded, batch["level_types"], task=self.task)
+        # Same as forward but keeps the attention maps for the overlay figures
+        with torch.no_grad():
+            tokens = self.make_tokens(batch)
+            encoded, attention = self.encoder.forward_with_attention(
+                tokens, batch["level_indices"], batch["level_types"], batch["num_levels"])
+            logits, disc_mask = self.heads(encoded, batch["level_types"], task=self.task)
 
-        out = {
-            "logits": logits,
-            "disc_mask": disc_mask,
-            "encoded_tokens": encoded,
-            "disc_level_indices": batch["level_indices"][disc_mask],
-        }
-        return out, attention
+            disc_levels = batch["level_indices"][disc_mask]
+            out = {
+                "logits": logits,
+                "disc_mask": disc_mask,
+                "encoded_tokens": encoded,
+                "disc_level_indices": disc_levels,
+            }
+            return out, attention
 
     def count_trainable_params(self):
         total = 0

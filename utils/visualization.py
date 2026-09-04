@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+from sklearn.metrics import confusion_matrix
 import matplotlib
 
 matplotlib.use("Agg")
@@ -15,12 +16,15 @@ def ensure_dir(save_path):
 
 
 def plot_grade_confusion_matrix(true, pred, class_names, title, save_path):
-    from sklearn.metrics import confusion_matrix
-
     true = np.asarray(true).reshape(-1)
     pred = np.asarray(pred).reshape(-1)
+
+    # Drop the unlabelled levels, same as everywhere else
     valid = true != -1
-    confusion = confusion_matrix(true[valid], pred[valid], labels=list(range(len(class_names))))
+    class_labels = []
+    for i in range(len(class_names)):
+        class_labels.append(i)
+    confusion = confusion_matrix(true[valid], pred[valid], labels=class_labels)
 
     ensure_dir(save_path)
     fig, ax = plt.subplots(figsize=(6, 5))
@@ -38,12 +42,15 @@ def plot_grade_confusion_matrix(true, pred, class_names, title, save_path):
 def plot_level_attribution_heatmap(analyzer_results, save_path):
     model_names = list(analyzer_results.keys())
 
+    # Collect every level name any model reported, keeping the order we met them
     level_names = []
     for name in model_names:
-        for level in analyzer_results[name].get("per_level", {}):
+        per_level = analyzer_results[name].get("per_level", {})
+        for level in per_level:
             if level not in level_names:
                 level_names.append(level)
 
+    # One row per model, one column per level, nan where a model has no number
     matrix = []
     for name in model_names:
         per_level = analyzer_results[name].get("per_level", {})
@@ -94,6 +101,8 @@ def plot_attention_weights(attention_matrix, level_labels, save_path,
 def plot_attention_overlay(image, boxes, attention_weights, level_labels, save_path,
                            title="Attention overlay"):
     image = np.asarray(image)
+
+    # The image comes in as 3 stacked slices, we just want something to look at
     if image.ndim == 3:
         if image.shape[0] <= 4:
             image = image[image.shape[0] // 2]
@@ -102,14 +111,19 @@ def plot_attention_overlay(image, boxes, attention_weights, level_labels, save_p
 
     boxes = np.asarray(boxes)
     weights = np.asarray(attention_weights, dtype=float)
+
+    # Squash the weights into 0...1 so the colours are comparable between figures
     if weights.size and weights.max() > weights.min():
-        weights = (weights - weights.min()) / (weights.max() - weights.min())
+        low = weights.min()
+        high = weights.max()
+        weights = (weights - low) / (high - low)
 
     ensure_dir(save_path)
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.imshow(image, cmap="gray")
     colormap = plt.get_cmap("autumn")
 
+    # Draw a box per level, coloured by how much attention it received
     for i in range(len(boxes)):
         x1, y1, x2, y2 = boxes[i]
         if i < len(weights):
@@ -117,9 +131,9 @@ def plot_attention_overlay(image, boxes, attention_weights, level_labels, save_p
         else:
             weight = 0.0
 
+        colour = colormap(weight)
         rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2,
-                                 edgecolor=colormap(weight),
-                                 facecolor=colormap(weight), alpha=0.35)
+                                 edgecolor=colour, facecolor=colour, alpha=0.35)
         ax.add_patch(rect)
 
         if level_labels and i < len(level_labels):
@@ -140,6 +154,7 @@ def plot_training_curves(history, save_path):
     ensure_dir(save_path)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
 
+    # Losses on the left
     if "train_loss" in history:
         epochs = range(1, len(history["train_loss"]) + 1)
         axes[0].plot(epochs, history["train_loss"], label="train")
@@ -152,6 +167,7 @@ def plot_training_curves(history, save_path):
     axes[0].set_title("Loss")
     axes[0].legend()
 
+    # Validation scores on the right, whichever ones this run recorded
     for key in ["val_macro_f1", "val_kappa", "val_balanced_acc"]:
         if key in history:
             epochs = range(1, len(history[key]) + 1)
@@ -196,12 +212,14 @@ def plot_ablation_comparison(results_dict, metric_name, save_path, errors=None):
             error_kw={"ecolor": "0.35", "lw": 1.2})
 
     ax.set_xlabel(metric_name)
-    ax.set_title(metric_name + " across ablation variants (mean and std over seeds)")
-    ax.set_xlim(0, max(1.0, (max(values) + max(bar_errors)) * 1.15))
+    ax.set_title(f"{metric_name} across ablation variants (mean and std over seeds)")
+
+    widest = max(values) + max(bar_errors)
+    ax.set_xlim(0, max(1.0, widest * 1.15))
 
     for i in range(len(values)):
-        ax.text(values[i] + bar_errors[i] + 0.012, i, "%.3f" % values[i],
-                va="center", fontsize=9)
+        x = values[i] + bar_errors[i] + 0.012
+        ax.text(x, i, "%.3f" % values[i], va="center", fontsize=9)
 
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import kagglehub
 import pandas as pd
+from sklearn.model_selection import train_test_split
 from kagglehub.exceptions import KaggleApiHTTPError, NotFoundError
 
 COMPETITION = "rsna-2024-lumbar-spine-degenerative-classification"
@@ -157,7 +158,6 @@ def select_studies(csv_dir, count, seed=42):
             return max(grades)
 
         table["worst"] = table[grade_cols].apply(worst_grade_in_row, axis=1)
-        from sklearn.model_selection import train_test_split
         selected, _ = train_test_split(
             table.study_id.tolist(), train_size=count, stratify=table.worst, random_state=seed
         )

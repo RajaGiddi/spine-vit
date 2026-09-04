@@ -64,6 +64,7 @@ class AnatomyEncoder(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
 
     def pack(self, tokens, num_levels):
+        # Studies can have different numbers of levels, so pad them all to the longest and hand the transformer a mask saying which slots are filler
         batch_size = len(num_levels)
         if num_levels:
             max_count = max(num_levels)
@@ -75,6 +76,7 @@ class AnatomyEncoder(nn.Module):
         mask = torch.ones(batch_size, max_count, dtype=torch.bool, device=tokens.device)
         slices = []
 
+        # Remember where each study started so we can undo this later
         offset = 0
         for i in range(batch_size):
             count = num_levels[i]
@@ -86,6 +88,7 @@ class AnatomyEncoder(nn.Module):
         return padded, mask, slices
 
     def unpack(self, padded, slices, n_total):
+        # Back to one long list of tokens, dropping the padding
         out = padded.new_zeros(n_total, padded.shape[-1])
         for i in range(len(slices)):
             offset, count = slices[i]
@@ -93,7 +96,10 @@ class AnatomyEncoder(nn.Module):
         return out
 
     def add_context(self, tokens, level_indices, level_types):
-        return tokens + self.pos_encoder(level_indices) + self.type_embedding(level_types)
+        # Tell each token which level it is and whether it is a disc or a vertebra
+        position = self.pos_encoder(level_indices)
+        kind = self.type_embedding(level_types)
+        return tokens + position + kind
 
     def forward(self, tokens, level_indices, level_types, num_levels):
         tokens_with_context = self.add_context(tokens, level_indices, level_types)
@@ -102,25 +108,32 @@ class AnatomyEncoder(nn.Module):
         encoded = self.norm(encoded)
         return self.unpack(encoded, slices, tokens.shape[0])
 
-    @torch.no_grad()
     def forward_with_attention(self, tokens, level_indices, level_types, num_levels):
-        tokens_with_context = self.add_context(tokens, level_indices, level_types)
-        padded, mask, slices = self.pack(tokens_with_context, num_levels)
+        # Torch's encoder layer will not give us the attention weights, so we redo the pre-norm maths by hand here. Same numbers, we just get to keep the maps
+        with torch.no_grad():
+            tokens_with_context = self.add_context(tokens, level_indices, level_types)
+            padded, mask, slices = self.pack(tokens_with_context, num_levels)
 
-        hidden = padded
-        attention_maps = []
-        for layer in self.encoder.layers:
-            normed = layer.norm1(hidden)
-            attn_out, attn_weights = layer.self_attn(normed, normed, normed, key_padding_mask=mask,
-                                                     need_weights=True,
-                                                     average_attn_weights=True)
-            hidden = hidden + layer.dropout1(attn_out)
+            hidden = padded
+            attention_maps = []
+            for layer in self.encoder.layers:
+                # Attention block
+                normed = layer.norm1(hidden)
+                attn_out, attn_weights = layer.self_attn(normed, normed, normed,
+                                                         key_padding_mask=mask,
+                                                         need_weights=True,
+                                                         average_attn_weights=True)
+                hidden = hidden + layer.dropout1(attn_out)
 
-            normed_again = layer.norm2(hidden)
-            feed_forward = layer.linear2(layer.dropout(layer.activation(layer.linear1(normed_again))))
-            hidden = hidden + layer.dropout2(feed_forward)
+                # Feed forward block
+                normed_again = layer.norm2(hidden)
+                inner = layer.linear1(normed_again)
+                inner = layer.activation(inner)
+                inner = layer.dropout(inner)
+                feed_forward = layer.linear2(inner)
+                hidden = hidden + layer.dropout2(feed_forward)
 
-            attention_maps.append(attn_weights)
+                attention_maps.append(attn_weights)
 
-        hidden = self.norm(hidden)
-        return self.unpack(hidden, slices, tokens.shape[0]), attention_maps
+            hidden = self.norm(hidden)
+            return self.unpack(hidden, slices, tokens.shape[0]), attention_maps

@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import pydicom
 import torch
 from torch.utils.data import Dataset
 
@@ -27,16 +28,12 @@ def minmax(pixels):
 
 
 def first_value(value):
-    import pydicom
-
     if isinstance(value, pydicom.multival.MultiValue):
         return float(value[0])
     return float(value)
 
 
 def load_dicom_slice(path):
-    import pydicom
-
     dicom = pydicom.dcmread(path)
     pixels = dicom.pixel_array.astype(np.float32)
 

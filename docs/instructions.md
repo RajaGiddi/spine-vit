@@ -456,12 +456,12 @@ Each experiment saves:
 **Primary metrics (for main results table):**
 
 ```python
-def compute_metrics(preds, targets, num_classes, task_name=""):
+def compute_metrics(predictions, targets, num_classes, task_name=""):
     # Filter invalid targets (== -1)
     # macro_f1: sklearn.metrics.f1_score(average="macro")
     # kappa: sklearn.metrics.cohen_kappa_score
     # balanced_acc: sklearn.metrics.balanced_accuracy_score
-    # accuracy: simple (preds == targets).mean()
+    # accuracy: simple (predictions == targets).mean()
     # Per-class F1 for each grade
     # Return dict of all metrics
 ```
@@ -480,7 +480,7 @@ class LevelAttributionAnalyzer:
     - Grade confusion matrix
     - Miss rate (how often pathology is missed entirely)
     """
-    def update(self, pred_grades, true_grades, level_indices, patient_id):
+    def update(self, prediction_grades, true_grades, level_indices, patient_id):
         # Record each prediction for later analysis
 
     def compute(self, pathology_threshold=1):
@@ -496,7 +496,7 @@ class LevelAttributionAnalyzer:
 Generate these figures for the paper:
 
 ```python
-def plot_grade_confusion_matrix(true, pred, class_names, title, save_path):
+def plot_grade_confusion_matrix(true, prediction, class_names, title, save_path):
     """Heatmap of predicted vs true grades. Use seaborn heatmap."""
 
 def plot_level_attribution_heatmap(analyzer_results, save_path):

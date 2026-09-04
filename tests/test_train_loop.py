@@ -85,9 +85,9 @@ def main():
     assert last < first, f"loss did not decrease ({first:.4f} -> {last:.4f})"
 
     eval_res = run_epoch(model, loader, criterion, device, cfg, optimizer=None, desc="")
-    metrics = compute_metrics(eval_res["preds"], eval_res["targets"], NUM_CLASSES)
+    metrics = compute_metrics(eval_res["predictions"], eval_res["targets"], NUM_CLASSES)
     analyzer = LevelAttributionAnalyzer(num_classes=NUM_CLASSES)
-    analyzer.update(eval_res["preds"], eval_res["targets"], eval_res["levels"], patient_id=eval_res["studyids"])
+    analyzer.update(eval_res["predictions"], eval_res["targets"], eval_res["levels"], patient_id=eval_res["studyids"])
     attr = analyzer.compute()
     print(f"metrics: macro_f1={metrics['macro_f1']:.3f} kappa={metrics['kappa']:.3f} acc={metrics['accuracy']:.3f}")
     print(f"worst_level_acc={attr['worst_level_accuracy']} pathology P/R="

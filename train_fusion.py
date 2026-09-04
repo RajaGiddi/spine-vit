@@ -9,6 +9,8 @@ from torch.utils.data import DataLoader
 from models.spine_fusion import build_fusion_model
 from train import load_config, resolve_device, set_seed, run_epoch, evaluate_split, format_metric
 from utils.metrics import compute_metrics, compute_class_weights
+from data.rsna_fusion import make_rsna_fusion_splits, rsna_fusion_collate_fn
+from data.rsna_axial import build_axial_index
 
 
 def fusion_experiment_name(config):
@@ -36,8 +38,6 @@ def fusion_experiment_name(config):
 
 
 def get_fusion_dataloaders(config):
-    from data.rsna_fusion import make_rsna_fusion_splits, rsna_fusion_collate_fn
-
     train_ds, val_ds, test_ds = make_rsna_fusion_splits(config["data_dir"], config)
 
     limit = config.get("limit_samples")
@@ -60,8 +60,6 @@ def get_fusion_dataloaders(config):
 
 
 def axial_coverage_set(data_dir):
-    from data.rsna_axial import build_axial_index
-
     axial = build_axial_index(data_dir)
     covered = set()
     for study_id in axial:
@@ -83,7 +81,7 @@ def subset_metrics(test_res, covered, num_classes):
     if keep.sum() == 0:
         return None, 0
 
-    metrics = compute_metrics(test_res["preds"][keep], test_res["targets"][keep], num_classes)
+    metrics = compute_metrics(test_res["predictions"][keep], test_res["targets"][keep], num_classes)
     return metrics, int(keep.sum())
 
 
@@ -203,14 +201,14 @@ def main():
         "attribution_full": test_res["attribution"],
         "metrics_axial_subset": axial_metrics,
         "n_axial_subset_tokens": n_axial,
-        "n_full_tokens": int(len(test_res["preds"])),
+        "n_full_tokens": int(len(test_res["predictions"])),
         "best_epoch": best_epoch,
     }
     with open(os.path.join(out_dir, "test_results.json"), "w") as results_file:
         json.dump(test_out, results_file, indent=2)
 
     predictions = {}
-    for key in ["studyids", "levels", "preds", "targets"]:
+    for key in ["studyids", "levels", "predictions", "targets"]:
         values = []
         for value in test_res[key]:
             values.append(int(value))

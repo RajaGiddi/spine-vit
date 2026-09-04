@@ -5,11 +5,13 @@ import torch.nn as nn
 class CoralLayer(nn.Module):
     def __init__(self, in_dim, num_classes):
         super().__init__()
+        # One shared direction plus a bias per threshold, so the cutoffs stay in order
         self.fc = nn.Linear(in_dim, 1, bias=False)
         self.bias = nn.Parameter(torch.zeros(num_classes - 1))
 
     def forward(self, x):
-        return self.fc(x) + self.bias
+        score = self.fc(x)
+        return score + self.bias
 
 
 def make_head(embed_dim, num_classes, dropout, head_type):
@@ -35,6 +37,7 @@ class GradingHeads(nn.Module):
         self.pfirrmann_head = make_head(embed_dim, num_pfirrmann_classes, dropout, head_type)
 
     def forward(self, encoded_tokens, level_types, task="stenosis"):
+        # Only discs get a grade, vertebra tokens are there for context
         disc_mask = level_types == 1
         disc_tokens = encoded_tokens[disc_mask]
 

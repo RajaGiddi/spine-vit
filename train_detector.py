@@ -35,14 +35,14 @@ def evaluate(model, loader, device, scale, desc="val"):
     with torch.no_grad():
         for batch in tqdm(loader, desc=desc, leave=False):
             batch = move_batch(batch, device)
-            pred = model(batch["image"])
+            prediction = model(batch["image"])
 
-            loss = coord_loss(pred, batch["centers"] / scale, batch["valid"])
+            loss = coord_loss(prediction, batch["centers"] / scale, batch["valid"])
             total_loss = total_loss + float(loss)
             num_batches = num_batches + 1
 
-            pred_centers = soft_argmax(pred) * scale
-            error = localization_error_mm(pred_centers, batch["centers"], batch["mm_scale"])
+            prediction_centers = soft_argmax(prediction) * scale
+            error = localization_error_mm(prediction_centers, batch["centers"], batch["mm_scale"])
             report.update(error, batch["valid"])
 
     return total_loss / max(1, num_batches), report.compute()
@@ -56,8 +56,8 @@ def save_overlays(model, dataset, device, scale, out_dir, n=20):
         item = dataset[i]
 
         with torch.no_grad():
-            pred = model(item["image"].unsqueeze(0).to(device))
-            pred_centers = (soft_argmax(pred) * scale)[0].cpu().numpy()
+            prediction = model(item["image"].unsqueeze(0).to(device))
+            prediction_centers = (soft_argmax(prediction) * scale)[0].cpu().numpy()
 
         image = item["image"].numpy()
         if image.ndim == 3:
@@ -74,11 +74,11 @@ def save_overlays(model, dataset, device, scale, out_dir, n=20):
             if valid[level]:
                 ax.plot(true_centers[level, 0], true_centers[level, 1], "r+",
                         markersize=12, markeredgewidth=2)
-            ax.plot(pred_centers[level, 0], pred_centers[level, 1], "bx",
+            ax.plot(prediction_centers[level, 0], prediction_centers[level, 1], "bx",
                     markersize=9, markeredgewidth=2)
-            ax.text(pred_centers[level, 0] + 3, pred_centers[level, 1],
+            ax.text(prediction_centers[level, 0] + 3, prediction_centers[level, 1],
                     RSNA_LEVEL_NAMES[level], color="cyan", fontsize=7)
-        ax.set_title(f"study {item['study_id']}  (red=true, blue=pred)")
+        ax.set_title(f"study {item['study_id']}  (red=true, blue=prediction)")
         ax.axis("off")
 
         filename = f"overlay_{i}_{item['study_id']}.png"
@@ -102,10 +102,10 @@ def export_detected_centers(model, data_dir, config, device, scale, out_path):
 
     with torch.no_grad():
         for batch in tqdm(loader, desc="export", leave=False):
-            pred_centers = soft_argmax(model(batch["image"].to(device))) * scale
-            error = localization_error_mm(pred_centers.cpu(), batch["centers"],
+            prediction_centers = soft_argmax(model(batch["image"].to(device))) * scale
+            error = localization_error_mm(prediction_centers.cpu(), batch["centers"],
                                           batch["mm_scale"])
-            pred_centers = pred_centers.cpu().numpy()
+            prediction_centers = prediction_centers.cpu().numpy()
             original_size = batch["orig_hw"].numpy()
             valid = batch["valid"].bool()
 
@@ -115,9 +115,9 @@ def export_detected_centers(model, data_dir, config, device, scale, out_path):
                 width = float(original_size[sample_index, 1])
 
                 centers = {}
-                for level in range(pred_centers.shape[1]):
-                    x = float(pred_centers[sample_index, level, 0] * width / image_size)
-                    y = float(pred_centers[sample_index, level, 1] * height / image_size)
+                for level in range(prediction_centers.shape[1]):
+                    x = float(prediction_centers[sample_index, level, 0] * width / image_size)
+                    y = float(prediction_centers[sample_index, level, 1] * height / image_size)
                     centers[str(level)] = [x, y]
                 detected[str(study_id)] = centers
 
@@ -182,8 +182,8 @@ def main():
 
         for batch in tqdm(train_loader, desc=f"train {epoch}", leave=False):
             batch = move_batch(batch, device)
-            pred = model(batch["image"])
-            loss = coord_loss(pred, batch["centers"] / scale, batch["valid"], reg=args.reg)
+            prediction = model(batch["image"])
+            loss = coord_loss(prediction, batch["centers"] / scale, batch["valid"], reg=args.reg)
 
             optimizer.zero_grad()
             loss.backward()

@@ -113,10 +113,10 @@ def figure1(data, log, study=None):
     log.append(f"Figure 1 study: {study}")
 
 
-def load_predictions_by_study(pred_path):
-    tp = json.load(open(pred_path))
+def load_predictions_by_study(prediction_path):
+    tp = json.load(open(prediction_path))
     out = {}
-    for sid, level, pr, tg in zip(tp["studyids"], tp["levels"], tp["preds"], tp["targets"]):
+    for sid, level, pr, tg in zip(tp["studyids"], tp["levels"], tp["predictions"], tp["targets"]):
         out.setdefault(sid, {})[level] = (pr, tg)
     return out, list(dict.fromkeys(tp["studyids"]))
 
@@ -125,8 +125,8 @@ def grade_box(ax, cx, cy, color, half=16, lw=0.9):
     ax.add_patch(patches.Rectangle((cx - half, cy - half), 2 * half, 2 * half, lw=lw, ec=color, fc="none"))
 
 
-def figure2(data, log, pred_path, det_path):
-    byid, order = load_predictions_by_study(pred_path)
+def figure2(data, log, prediction_path, det_path):
+    byid, order = load_predictions_by_study(prediction_path)
     det = json.load(open(det_path))
 
     def argworst(per_level, key):
@@ -136,12 +136,12 @@ def figure2(data, log, pred_path, det_path):
         return max(sorted(per_level), key=grade_at_level)
 
     succ = next((sample for sample in order if sample in data.pos and len(byid[sample]) == 5
-                 and all(pred_grade == true_grade for pred_grade, true_grade in byid[sample].values())
+                 and all(prediction_grade == true_grade for prediction_grade, true_grade in byid[sample].values())
                  and max(true_grade for _, true_grade in byid[sample].values()) >= 1), None)
     mis = next((sample for sample in order if sample in data.pos
                 and max(true_grade for _, true_grade in byid[sample].values()) >= 1
-                and max(pred_grade for pred_grade, _ in byid[sample].values()) >= 1
-                and any(pred_grade >= 1 and true_grade >= 1 for pred_grade, true_grade in byid[sample].values())
+                and max(prediction_grade for prediction_grade, _ in byid[sample].values()) >= 1
+                and any(prediction_grade >= 1 and true_grade >= 1 for prediction_grade, true_grade in byid[sample].values())
                 and argworst(byid[sample], 0) != argworst(byid[sample], 1)), None)
 
     worst_l12 = None
@@ -166,10 +166,10 @@ def figure2(data, log, pred_path, det_path):
     plain_axes(ax[0], img)
     for box, li in zip(boxes, lvls):
         x1, y1, x2, y2 = box
-        pred_grade, true_grade = byid[succ][li]
+        prediction_grade, true_grade = byid[succ][li]
         grade_box(ax[0], (x1 + x2) / 2, (y1 + y2) / 2, RIGHT)
-        txt = f"{LEVELS[li]}: {GRADES[pred_grade]}"
-        if pred_grade != true_grade:
+        txt = f"{LEVELS[li]}: {GRADES[prediction_grade]}"
+        if prediction_grade != true_grade:
             txt = txt + f" ({GRADES[true_grade]})"
         label(ax[0], width - 2, (y1 + y2) / 2, txt, RIGHT)
     ax[0].set_title("(a) Correct", fontsize=7)
@@ -177,16 +177,16 @@ def figure2(data, log, pred_path, det_path):
     img, boxes, lvls, tgts, _ = data.slice_boxes(mis)
     width = img.shape[1]
     plain_axes(ax[1], img)
-    true_w, pred_w = argworst(byid[mis], 1), argworst(byid[mis], 0)
+    true_w, prediction_w = argworst(byid[mis], 1), argworst(byid[mis], 0)
     for box, li in zip(boxes, lvls):
         x1, y1, x2, y2 = box
-        pred_grade, true_grade = byid[mis][li]
-        worst = li in (true_w, pred_w)
-        box_c = RIGHT if li == true_w else (WRONG if li == pred_w else "0.6")
-        txt_c = RIGHT if li == true_w else (WRONG if li == pred_w else NEUTRAL)
+        prediction_grade, true_grade = byid[mis][li]
+        worst = li in (true_w, prediction_w)
+        box_c = RIGHT if li == true_w else (WRONG if li == prediction_w else "0.6")
+        txt_c = RIGHT if li == true_w else (WRONG if li == prediction_w else NEUTRAL)
         grade_box(ax[1], (x1 + x2) / 2, (y1 + y2) / 2, box_c, lw=1.2 if worst else 0.7)
-        txt = f"{LEVELS[li]}: {GRADES[pred_grade]}"
-        if pred_grade != true_grade:
+        txt = f"{LEVELS[li]}: {GRADES[prediction_grade]}"
+        if prediction_grade != true_grade:
             txt = txt + f" ({GRADES[true_grade]})"
         label(ax[1], width - 2, (y1 + y2) / 2, txt, txt_c)
     ax[1].set_title("(b) Under Grading", fontsize=7)
@@ -215,7 +215,7 @@ def figure2(data, log, pred_path, det_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", default="data/rsna")
-    parser.add_argument("--pred", default="outputs_modal/rsna_anatomy_ordinal_256_2_b48_s42/test_predictions.json")
+    parser.add_argument("--prediction", default="outputs_modal/rsna_anatomy_ordinal_256_2_b48_s42/test_predictions.json")
     parser.add_argument("--detector", default="outputs/detector/detected_centers.json")
     parser.add_argument("--fig1_study", type=int, default=None)
     args = parser.parse_args()
@@ -224,7 +224,7 @@ def main():
     data = Data(args.data_dir)
     log = []
     figure1(data, log, study=args.fig1_study)
-    figure2(data, log, args.pred, args.detector)
+    figure2(data, log, args.prediction, args.detector)
     print("\n".join(log))
     with open("figures/selection_log.txt", "w") as f:
         f.write("\n".join(log) + "\n")

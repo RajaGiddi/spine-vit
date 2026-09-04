@@ -19,6 +19,7 @@ image = (
     .pip_install(
         "torch", "torchvision", "numpy", "pandas", "scikit-learn", "pyyaml",
         "pydicom", "pillow", "scipy", "matplotlib", "seaborn", "tqdm",
+        "SimpleITK",
     )
     .env({"TORCH_HOME": TORCH_HOME})
     .run_function(cache_dinov2)

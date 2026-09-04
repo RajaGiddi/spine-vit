@@ -11,6 +11,9 @@ from tqdm import tqdm
 from models import build_model
 from utils.metrics import compute_metrics, compute_class_weights, LevelAttributionAnalyzer
 from utils.metrics import RSNA_LEVEL_NAMES
+from utils.metrics import coral_loss, coral_predict, coral_pos_weights
+from data.rsna_dataset import make_rsna_splits, rsna_collate_fn
+from data.spider_dataset import make_spider_splits, spider_collate_fn
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "configs", "default.yaml")
 
@@ -91,13 +94,9 @@ def format_metric(value):
 
 def get_dataloaders(config):
     if config["dataset"] == "rsna":
-        from data.rsna_dataset import make_rsna_splits, rsna_collate_fn
-
         train_ds, val_ds, test_ds = make_rsna_splits(config["data_dir"], config)
         collate = rsna_collate_fn
     elif config["dataset"] == "spider":
-        from data.spider_dataset import make_spider_splits, spider_collate_fn
-
         train_ds, val_ds, test_ds = make_spider_splits(config["data_dir"], config)
         collate = spider_collate_fn
     else:
@@ -152,7 +151,7 @@ def run_epoch(model, loader, criterion, device, config, optimizer=None, desc="",
 
     total_loss = 0.0
     num_batches = 0
-    all_preds = []
+    all_predictions = []
     all_targets = []
     all_levels = []
     all_study_ids = []
@@ -186,14 +185,14 @@ def run_epoch(model, loader, criterion, device, config, optimizer=None, desc="",
         num_batches = num_batches + 1
 
         keep = disc_mask.detach().cpu().numpy()
-        all_preds.append(predict_fn(logits).detach().cpu().numpy())
+        all_predictions.append(predict_fn(logits).detach().cpu().numpy())
         all_targets.append(targets.detach().cpu().numpy())
         all_levels.append(out["disc_level_indices"].detach().cpu().numpy())
         all_study_ids.append(study_ids[keep])
 
     return {
         "loss": total_loss / max(1, num_batches),
-        "preds": join_arrays(all_preds),
+        "predictions": join_arrays(all_predictions),
         "targets": join_arrays(all_targets),
         "levels": join_arrays(all_levels),
         "studyids": join_arrays(all_study_ids),
@@ -209,18 +208,16 @@ def evaluate_split(model, loader, criterion, device, config, desc="val", predict
         level_names = None
 
     analyzer = LevelAttributionAnalyzer(level_names=level_names, num_classes=config["num_classes"])
-    analyzer.update(result["preds"], result["targets"], result["levels"],
+    analyzer.update(result["predictions"], result["targets"], result["levels"],
                     patient_id=result["studyids"])
 
-    result["metrics"] = compute_metrics(result["preds"], result["targets"], config["num_classes"])
+    result["metrics"] = compute_metrics(result["predictions"], result["targets"], config["num_classes"])
     result["attribution"] = analyzer.compute()
     return result
 
 
 def build_criterion(config, train_dataset, class_weights, device):
     if config.get("head", "ce") == "coral":
-        from utils.metrics import coral_loss, coral_predict, coral_pos_weights
-
         pos_weight = coral_pos_weights(train_dataset, config["num_classes"]).to(device)
 
         def criterion(logits, targets):
@@ -296,7 +293,7 @@ def main():
     for epoch in range(1, config["epochs"] + 1):
         train_res = run_epoch(model, train_loader, criterion, device, config, optimizer,
                               desc=f"train {epoch}", predict_fn=predict_fn)
-        train_metrics = compute_metrics(train_res["preds"], train_res["targets"],
+        train_metrics = compute_metrics(train_res["predictions"], train_res["targets"],
                                         config["num_classes"])
         val_res = evaluate_split(model, val_loader, criterion, device, config,
                                  desc=f"val {epoch}", predict_fn=predict_fn)
@@ -362,7 +359,7 @@ def main():
         json.dump(test_out, results_file, indent=2)
 
     predictions = {}
-    for key in ["studyids", "levels", "preds", "targets"]:
+    for key in ["studyids", "levels", "predictions", "targets"]:
         values = []
         for value in test_res[key]:
             values.append(int(value))

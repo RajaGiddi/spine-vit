@@ -3,17 +3,20 @@ from PIL import Image
 
 
 def to_chw(image):
+    # A plain 2d slice gets a channel axis so the rest of the code can assume (C,H,W)
     if image.ndim == 2:
         return image[None, :, :], True
-    if image.ndim == 3:
+    elif image.ndim == 3:
         return image, False
-    raise ValueError(f"Expected a (H,W) or (C,H,W) image, got shape {image.shape}")
+    else:
+        raise ValueError(f"Expected a (H,W) or (C,H,W) image, got shape {image.shape}")
 
 
 def resize_channels(image, out_h, out_w):
+    # PIL only does one channel at a time, so resize each slice and stack them back
     channels = []
-    for channel in range(image.shape[0]):
-        pil = Image.fromarray(image[channel].astype(np.float32), mode="F")
+    for i in range(image.shape[0]):
+        pil = Image.fromarray(image[i].astype(np.float32), mode="F")
         pil = pil.resize((out_w, out_h), Image.BILINEAR)
         channels.append(np.asarray(pil, dtype=np.float32))
     return np.stack(channels, axis=0)
@@ -30,6 +33,7 @@ class SpineAugmentation:
         self.noise_std = noise_std
 
     def vertical_shift(self, image, boxes, height):
+        # Slide the whole picture up or down a bit and move the boxes with it
         shift = int(round(np.random.uniform(-self.vshift_frac, self.vshift_frac) * height))
         if shift == 0:
             return image, boxes
@@ -45,6 +49,8 @@ class SpineAugmentation:
 
     def horizontal_flip(self, image, boxes, width):
         image = image[:, :, ::-1].copy()
+
+        # After a mirror the old right edge becomes the new left edge, so swap them
         left = boxes[:, 0].copy()
         right = boxes[:, 2].copy()
         boxes[:, 0] = width - right
@@ -52,6 +58,7 @@ class SpineAugmentation:
         return image, boxes
 
     def crop_and_resize(self, image, boxes, height, width):
+        # Take a slightly smaller window, then blow it back up to image_size
         area_frac = np.random.uniform(self.min_crop_area, 1.0)
         side = float(np.sqrt(area_frac))
         crop_h = max(1, int(round(height * side)))
@@ -61,9 +68,10 @@ class SpineAugmentation:
         left = np.random.randint(0, width - crop_w + 1)
 
         image = image[:, top:top + crop_h, left:left + crop_w]
+
+        # Shift the boxes into the crop, then scale them by how much we stretched
         boxes[:, [0, 2]] -= left
         boxes[:, [1, 3]] -= top
-
         boxes[:, [0, 2]] *= self.image_size / crop_w
         boxes[:, [1, 3]] *= self.image_size / crop_h
 
@@ -79,8 +87,9 @@ class SpineAugmentation:
 
         image, boxes = self.vertical_shift(image, boxes, height)
 
-        image = image * np.random.uniform(1.0 - self.intensity_frac,
-                                          1.0 + self.intensity_frac)
+        # Brightness wobble, nothing geometric so the boxes are unaffected
+        brightness = np.random.uniform(1.0 - self.intensity_frac, 1.0 + self.intensity_frac)
+        image = image * brightness
 
         if np.random.rand() < self.p_hflip:
             image, boxes = self.horizontal_flip(image, boxes, width)
@@ -91,6 +100,7 @@ class SpineAugmentation:
             noise = np.random.normal(0.0, self.noise_std, size=image.shape)
             image = image + noise.astype(np.float32)
 
+        # A shift or crop can push a box off the edge, so pull it back in and make sure x1 is still left of x2 after all that moving around
         boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, self.image_size)
         boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, self.image_size)
         boxes[:, 2] = np.maximum(boxes[:, 2], boxes[:, 0])

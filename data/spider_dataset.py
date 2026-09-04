@@ -2,6 +2,10 @@ import os
 import glob
 
 import numpy as np
+import pandas as pd
+import SimpleITK as sitk
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
 import torch
 from torch.utils.data import Dataset
 
@@ -15,8 +19,6 @@ IGNORE_INDEX = -1
 
 
 def load_volume(path):
-    import SimpleITK as sitk
-
     image = sitk.ReadImage(path)
     return sitk.GetArrayFromImage(image).astype(np.float32)
 
@@ -34,9 +36,6 @@ def bbox_from_mask(mask2d, label, pad=2):
 
 
 def intensity_heuristic_regions(image2d, box_h=24, box_w_frac=0.5, sigma=7.0):
-    from scipy.ndimage import gaussian_filter1d
-    from scipy.signal import find_peaks
-
     height, width = image2d.shape
     center_x = width // 2
     half_strip = max(1, width // 40)
@@ -92,8 +91,6 @@ def find_column(columns, keyword):
 
 
 def load_gradings(data_dir):
-    import pandas as pd
-
     path = find_gradings_file(data_dir)
     if path is None:
         return {}

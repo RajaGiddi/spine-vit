@@ -166,6 +166,6 @@ average, the same window `select_window=3` that checkpoint selection itself uses
    0.084" claim, the "7-10x seed SD" justification, the `r = -0.84` caveat, and any seed-count
    column showing three for anatomy.
 5. Figure 2b predicate. The panel now titled "Under Grading" still selects on *misattribution*
-   (`argworst(preds) != argworst(targets)`), and its box colours encode predicted-worst vs
+   (`argworst(predictions) != argworst(targets)`), and its box colours encode predicted-worst vs
    true-worst. The rendered case does show under-grading, but title, predicate, and colour
    encoding have diverged.
